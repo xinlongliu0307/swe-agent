@@ -24,3 +24,12 @@ src/workspace.ts    path guard, redaction, truncation
 src/log.ts          JSONL session log
 test/               node:test suites with a scripted fake model
 ```
+
+## Evaluating changes
+
+```bash
+npm run eval                                        # all tasks once
+npm run eval -- --tasks fix-mean,feature-median --repeat 3
+```
+
+Each task in `evals/tasks/<name>/` has a small `repo/`, an instruction in `task.md`, and a `check.sh` that exits 0 only when the task is truly solved. Fix tasks also fail if the agent edits the tests. The harness runs every task in a throwaway copy with shell commands auto-approved, judges it only by `check.sh` (never by the model's summary), and writes a JSON report to `runs/`. Keep a change only if the pass rate rises, or stays level with fewer steps and errors.

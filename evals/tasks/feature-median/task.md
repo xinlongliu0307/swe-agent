@@ -1,0 +1,1 @@
+Add a function median(xs) to stats.py that returns the median of a non-empty list of numbers (the average of the two middle values when the length is even) without modifying the input list. Add a unit test for it to test_stats.py and make sure all tests pass.
