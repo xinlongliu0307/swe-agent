@@ -1,4 +1,5 @@
-import type { AssistantMessage, LLM, Message, Tool } from "../types.ts";
+import type { AssistantMessage, LLM, Message, Tool, ToolCall } from "../types.ts";
+import { parseTextToolCalls } from "./textToolCalls.ts";
 
 /** Client for any OpenAI-compatible /chat/completions endpoint (Ollama, vLLM, hosted APIs). */
 export class OpenAICompatible implements LLM {
@@ -32,18 +33,23 @@ export class OpenAICompatible implements LLM {
     if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${await res.text()}`);
     const data = (await res.json()) as any;
     const msg = data.choices?.[0]?.message ?? {};
-    return {
-      role: "assistant",
-      content: msg.content ?? "",
-      toolCalls: (msg.tool_calls ?? []).map((c: any, i: number) => ({
-        id: c.id ?? `call_${i}`,
-        name: c.function.name,
-        arguments:
-          typeof c.function.arguments === "string"
-            ? c.function.arguments
-            : JSON.stringify(c.function.arguments ?? {}),
-      })),
-    };
+    let content: string = msg.content ?? "";
+    let toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((c: any, i: number) => ({
+      id: c.id ?? `call_${i}`,
+      name: c.function.name,
+      arguments:
+        typeof c.function.arguments === "string"
+          ? c.function.arguments
+          : JSON.stringify(c.function.arguments ?? {}),
+    }));
+    if (!toolCalls.length && content) {
+      const parsed = parseTextToolCalls(content, tools.map((t) => t.name));
+      if (parsed.calls.length) {
+        toolCalls = parsed.calls;
+        content = parsed.rest;
+      }
+    }
+    return { role: "assistant", content, toolCalls };
   }
 }
 
