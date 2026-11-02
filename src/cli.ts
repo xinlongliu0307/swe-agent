@@ -34,15 +34,28 @@ const confirm = async (q: string) =>
   values.yes || (await rl.question(`${q}\nAllow? [y/N] `)).trim().toLowerCase() === "y";
 
 const log = new SessionLog(path.join(repoRoot, "runs"), workspace);
-const result = await runAgent({
-  task,
-  llm: makeLLM(process.env),
-  tools: defaultTools,
-  ctx: { workspace, confirm },
-  maxSteps: Number(values["max-steps"] ?? process.env.SWE_MAX_STEPS ?? 30),
-  log,
-  onEvent: (kind, text) => console.log(kind === "tool" ? `  > ${text}` : `\n${text}`),
-});
+let result;
+try {
+  result = await runAgent({
+    task,
+    llm: makeLLM(process.env),
+    tools: defaultTools,
+    ctx: { workspace, confirm },
+    maxSteps: Number(values["max-steps"] ?? process.env.SWE_MAX_STEPS ?? 30),
+    log,
+    onEvent: (kind, text) => console.log(kind === "tool" ? `  > ${text}` : `\n${text}`),
+  });
+} catch (err) {
+  // Model or network failures: one clear line instead of a stack trace.
+  const e = err as Error & { cause?: { code?: string; message?: string } };
+  const cause = e.cause?.code ?? e.cause?.message ?? "";
+  log.write("error", { message: e.message, cause });
+  console.error(`\nModel request failed: ${e.message}${cause ? ` (${cause})` : ""}`);
+  console.error(`Check that ${process.env.SWE_BASE_URL ?? "the model endpoint"} is reachable from this machine.`);
+  console.error(`log: ${path.relative(process.cwd(), log.file)}`);
+  rl.close();
+  process.exit(1);
+}
 rl.close();
 console.log(`\n[${result.done ? "done" : "stopped"} in ${result.steps} steps] ${result.summary}`);
 console.log(`log: ${path.relative(process.cwd(), log.file)}`);
