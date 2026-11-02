@@ -43,7 +43,8 @@ try {
     ctx: { workspace, confirm },
     maxSteps: Number(values["max-steps"] ?? process.env.SWE_MAX_STEPS ?? 30),
     log,
-    onEvent: (kind, text) => console.log(kind === "tool" ? `  > ${text}` : `\n${text}`),
+    onEvent: (kind, text) =>
+      console.log(kind === "tool" ? `  > ${text}` : kind === "error" ? `  ! ${text}` : `\n${text}`),
   });
 } catch (err) {
   // Model or network failures: one clear line instead of a stack trace.

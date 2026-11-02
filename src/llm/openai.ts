@@ -49,8 +49,13 @@ export class OpenAICompatible implements LLM {
         content = parsed.rest;
       }
     }
-    return { role: "assistant", content, toolCalls };
+    return { role: "assistant", content: stripTemplateTokens(content), toolCalls };
   }
+}
+
+/** Remove chat-template control tokens (e.g. <|im_start|>assistant) that some local models leak into text. */
+export function stripTemplateTokens(text: string): string {
+  return text.replace(/<\|[a-z_]+\|>(?:assistant|user|system)?/g, "").trim();
 }
 
 function toWire(m: Message): Record<string, unknown> {

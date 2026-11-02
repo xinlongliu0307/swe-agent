@@ -52,3 +52,15 @@ test("OpenAI client falls back to text calls when tool_calls is missing", async 
   assert.equal(reply.toolCalls?.[0]?.name, "list_dir");
   assert.equal(reply.content, "");
 });
+
+test("chat-template tokens leaked by local models are stripped", async () => {
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: '<|im_start|><|im_start|>assistant\n{"name": "list_dir", "arguments": {}}<|im_end|>' } }],
+      }),
+    )) as typeof fetch;
+  const reply = await new OpenAICompatible({ baseUrl: "http://x/v1", model: "m" }).chat([], defaultTools);
+  assert.equal(reply.toolCalls?.[0]?.name, "list_dir");
+  assert.equal(reply.content, "");
+});

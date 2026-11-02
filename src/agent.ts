@@ -49,6 +49,7 @@ export async function runAgent(opts: {
       } catch (err) {
         result = `ERROR: ${(err as Error).message}`;
       }
+      if (result.startsWith("ERROR:")) onEvent("error", truncate(result, 300));
       result = truncate(result);
       messages.push({ role: "tool", content: result, toolCallId: call.id, name: call.name });
       log?.write("tool", { name: call.name, args: call.arguments, result });

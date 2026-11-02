@@ -74,3 +74,15 @@ test("stops at maxSteps", async () => {
   const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), maxSteps: 3 });
   assert.equal(res.done, false);
 });
+
+test("tool errors are surfaced to the console via onEvent", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "calc.py"), "def mean(xs):\n    return 0\n");
+  const events: string[] = [];
+  const llm = scripted([
+    call("edit_file", { path: "calc.py", old_str: "def mean(numbers):", new_str: "x" }),
+    call("finish", { summary: "ok" }),
+  ]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k, t) => events.push(`${k}:${t}`) });
+  assert.ok(events.some((e) => e.startsWith("error:ERROR: old_str found 0 times")));
+});
