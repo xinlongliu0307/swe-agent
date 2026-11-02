@@ -63,5 +63,7 @@ try {
   process.exit(1);
 }
 rl.close();
-console.log(`\n[${result.done ? "done" : "stopped"} in ${result.steps} steps] ${result.summary}`);
+console.log(`\n[${result.done ? "done" : "stopped"} in ${result.steps} steps]`);
+console.log(`Model summary: ${result.summary}`);
+console.log(`Files changed (recorded by the agent): ${result.changed.length ? result.changed.join(", ") : "none"}`);
 console.log(`log: ${path.relative(process.cwd(), log.file)}`);

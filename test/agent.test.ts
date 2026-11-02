@@ -51,6 +51,7 @@ test("agent loop writes, edits, runs shell, then finishes", async () => {
   const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws) });
   assert.equal(res.done, true);
   assert.equal(res.steps, 4);
+  assert.deepEqual(res.changed, ["hello.py"]); // recorded by the agent, not claimed by the model
   assert.equal(await fs.readFile(path.join(ws, "hello.py"), "utf8"), "print('hello')\n");
 });
 
@@ -108,4 +109,12 @@ test("edit_file says when an edit is already applied", async () => {
     editFile.run({ path: "calc.py", old_str: "(len(xs) - 1)", new_str: "sum(xs) / len(xs)" }, ctxFor(ws)),
     /already applied/,
   );
+});
+
+test("failed edits are not recorded as changes", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "a.txt"), "abc");
+  const llm = scripted([call("edit_file", { path: "a.txt", old_str: "zzz", new_str: "y" }), call("finish", { summary: "changed a.txt" })]);
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws) });
+  assert.deepEqual(res.changed, []);
 });
