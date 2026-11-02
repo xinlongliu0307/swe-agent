@@ -85,6 +85,11 @@ export const editFile: Tool = {
     const oldStr = str(args.old_str, "old_str");
     const text = await fs.readFile(full, "utf8");
     const count = text.split(oldStr).length - 1;
+    const newStr = str(args.new_str, "new_str");
+    // Only for a meaningful snippet: a short new_str like "x" matches by chance.
+    if (count === 0 && newStr.trim().length >= 10 && text.includes(newStr)) {
+      throw new Error(`old_str not found in ${args.path}, but new_str is already present: the edit looks already applied. Re-read the file before editing again.`);
+    }
     if (count !== 1) throw new Error(`old_str found ${count} times in ${args.path}; it must be unique`);
     await fs.writeFile(full, text.replace(oldStr, () => str(args.new_str, "new_str")));
     return `Edited ${args.path}`;

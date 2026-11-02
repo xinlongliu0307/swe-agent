@@ -86,3 +86,26 @@ test("tool errors are surfaced to the console via onEvent", async () => {
   await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k, t) => events.push(`${k}:${t}`) });
   assert.ok(events.some((e) => e.startsWith("error:ERROR: old_str found 0 times")));
 });
+
+test("identical calls in one reply run once (observed duplicate edit_file)", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "calc.py"), "def mean(xs):\n    return sum(xs) / (len(xs) - 1)\n");
+  const edit = { id: "e", name: "edit_file", arguments: JSON.stringify({ path: "calc.py", old_str: "(len(xs) - 1)", new_str: "len(xs)" }) };
+  const errors: string[] = [];
+  const llm = scripted([
+    { role: "assistant", content: "", toolCalls: [edit, { ...edit, id: "e2" }] },
+    call("finish", { summary: "ok" }),
+  ]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k, t) => k === "error" && errors.push(t) });
+  assert.deepEqual(errors, []);
+  assert.equal(await fs.readFile(path.join(ws, "calc.py"), "utf8"), "def mean(xs):\n    return sum(xs) / len(xs)\n");
+});
+
+test("edit_file says when an edit is already applied", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "calc.py"), "    return sum(xs) / len(xs)\n");
+  await assert.rejects(
+    editFile.run({ path: "calc.py", old_str: "(len(xs) - 1)", new_str: "sum(xs) / len(xs)" }, ctxFor(ws)),
+    /already applied/,
+  );
+});

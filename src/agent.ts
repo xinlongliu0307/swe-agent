@@ -5,7 +5,8 @@ import type { SessionLog } from "./log.ts";
 export const SYSTEM_PROMPT = `You are a careful software engineering agent working inside a code repository.
 Work in small steps: inspect files before editing, make minimal changes, then verify by running tests.
 Use edit_file for targeted changes and write_file only for new files.
-All paths are relative to the repository root. When the task is done, call finish with a short summary.`;
+All paths are relative to the repository root. When the task is done, call finish with a short summary.
+Never write tool results yourself: after making tool calls, stop and wait for the real results.`;
 
 export type RunResult = { done: boolean; summary: string; steps: number };
 
@@ -38,9 +39,18 @@ export async function runAgent(opts: {
       continue;
     }
 
+    const seen = new Set<string>();
     for (const call of reply.toolCalls) {
       const tool = byName.get(call.name);
       let result: string;
+      // Local models sometimes repeat the same call in one reply; running it twice
+      // makes the second copy fail and confuses the model, so answer it without running.
+      const key = `${call.name}\u0000${call.arguments}`;
+      if (seen.has(key)) {
+        messages.push({ role: "tool", content: "Duplicate call skipped; see the previous result.", toolCallId: call.id, name: call.name });
+        continue;
+      }
+      seen.add(key);
       try {
         if (!tool) throw new Error(`Unknown tool: ${call.name}`);
         const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
@@ -50,6 +60,7 @@ export async function runAgent(opts: {
         result = `ERROR: ${(err as Error).message}`;
       }
       if (result.startsWith("ERROR:")) onEvent("error", truncate(result, 300));
+      else if (call.name !== "finish") onEvent("result", (result.split("\n")[0] ?? "").slice(0, 120));
       result = truncate(result);
       messages.push({ role: "tool", content: result, toolCallId: call.id, name: call.name });
       log?.write("tool", { name: call.name, args: call.arguments, result });

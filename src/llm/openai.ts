@@ -33,7 +33,8 @@ export class OpenAICompatible implements LLM {
     if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${await res.text()}`);
     const data = (await res.json()) as any;
     const msg = data.choices?.[0]?.message ?? {};
-    let content: string = msg.content ?? "";
+    // Clean first, so JSON inside an invented tool result is never executed.
+    let content: string = stripTemplateTokens(msg.content ?? "");
     let toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((c: any, i: number) => ({
       id: c.id ?? `call_${i}`,
       name: c.function.name,
@@ -49,13 +50,16 @@ export class OpenAICompatible implements LLM {
         content = parsed.rest;
       }
     }
-    return { role: "assistant", content: stripTemplateTokens(content), toolCalls };
+    return { role: "assistant", content: content.trim(), toolCalls };
   }
 }
 
 /** Remove chat-template control tokens (e.g. <|im_start|>assistant) that some local models leak into text. */
 export function stripTemplateTokens(text: string): string {
-  return text.replace(/<\|[a-z_]+\|>(?:assistant|user|system)?/g, "").trim();
+  return text
+    .replace(/<?tool_response>[\s\S]*?(?:<\/tool_response>|$)/g, "") // results the model invented itself
+    .replace(/<\|[a-z_]+\|>(?:assistant|user|system)?/g, "")
+    .trim();
 }
 
 function toWire(m: Message): Record<string, unknown> {
