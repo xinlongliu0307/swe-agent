@@ -66,3 +66,17 @@ test("summarise computes pass rate and false claims", () => {
   assert.equal(s.falseClaims, 1);
   assert.equal(s.rows[0]?.solved, "1/2");
 });
+
+test("preflight reports an unreachable model before any task runs", async () => {
+  const { preflight } = await import("../evals/run.ts");
+  assert.equal(await preflight(scripted([{ role: "assistant", content: "OK" }])), null);
+  const dead: LLM = { chat: async () => { throw new Error("Model request failed after 4 attempt(s): fetch failed (ECONNREFUSED)"); } };
+  assert.match((await preflight(dead)) ?? "", /ECONNREFUSED/);
+});
+
+test("consecutive model errors are counted from the end", async () => {
+  const { consecutiveModelErrors } = await import("../evals/run.ts");
+  const r = (modelError: boolean) => ({ modelError }) as Parameters<typeof consecutiveModelErrors>[0][number];
+  assert.equal(consecutiveModelErrors([r(true), r(false), r(true), r(true)]), 2);
+  assert.equal(consecutiveModelErrors([r(false)]), 0);
+});

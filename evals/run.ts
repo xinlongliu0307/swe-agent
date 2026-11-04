@@ -112,6 +112,25 @@ export async function runTask(
   }
 }
 
+/** Stop the whole eval after this many model errors in a row: the endpoint is down, not the agent. */
+export const MAX_CONSECUTIVE_MODEL_ERRORS = 3;
+
+export function consecutiveModelErrors(records: EvalRecord[]): number {
+  let n = 0;
+  for (let i = records.length - 1; i >= 0 && records[i]?.modelError; i--) n++;
+  return n;
+}
+
+/** One tiny model call before any task runs, so a dead endpoint fails in seconds, not after every task. */
+export async function preflight(llm: LLM): Promise<string | null> {
+  try {
+    await llm.chat([{ role: "user", content: "Reply with the single word OK." }], []);
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
 export function summarise(records: EvalRecord[]) {
   const valid = records.filter((r) => !r.invalid);
   const solved = valid.filter((r) => r.solved).length;
@@ -162,7 +181,17 @@ async function main() {
   const repeat = Number(values.repeat);
   const records: EvalRecord[] = [];
 
-  for (const name of names) {
+  process.stdout.write("Checking the model endpoint ... ");
+  const down = await preflight(llm);
+  if (down) {
+    console.error(`\nModel unreachable: ${down}`);
+    console.error(`Check that ${process.env.SWE_BASE_URL ?? "the model endpoint"} answers from this machine. No tasks were run.`);
+    process.exit(1);
+  }
+  console.log("ok\n");
+
+  let aborted = false;
+  outer: for (const name of names) {
     for (let rep = 1; rep <= repeat; rep++) {
       process.stdout.write(`${name} #${rep} ... `);
       const r = await runTask(path.join(TASKS_DIR, name), llm, {
@@ -177,6 +206,11 @@ async function main() {
           ? `INVALID (${r.invalid})`
           : `${r.solved ? "PASS" : "FAIL"}${r.modelError ? " (MODEL ERROR)" : ""}  steps=${r.steps} errors=${r.toolErrors} refused=${r.guardRefusals} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}`,
       );
+      if (consecutiveModelErrors(records) >= MAX_CONSECUTIVE_MODEL_ERRORS) {
+        console.error(`\nStopping: ${MAX_CONSECUTIVE_MODEL_ERRORS} model errors in a row. The endpoint went away; results so far are saved but are not a fair measurement.`);
+        aborted = true;
+        break outer;
+      }
     }
   }
 
@@ -191,7 +225,7 @@ async function main() {
   await fs.mkdir(path.dirname(report), { recursive: true });
   await fs.writeFile(
     report,
-    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, summary, records }, null, 2),
+    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, aborted, summary, records }, null, 2),
   );
   console.log(`report: ${path.relative(process.cwd(), report)}`);
 }
