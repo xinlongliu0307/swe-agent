@@ -38,7 +38,7 @@ let result;
 try {
   result = await runAgent({
     task,
-    llm: makeLLM(process.env),
+    llm: makeLLM(process.env, (attempt, reason) => console.log(`  ~ model call retry ${attempt}: ${reason}`)),
     tools: defaultTools,
     ctx: { workspace, confirm },
     maxSteps: Number(values["max-steps"] ?? process.env.SWE_MAX_STEPS ?? 30),
@@ -64,7 +64,7 @@ try {
   process.exit(1);
 }
 rl.close();
-console.log(`\n[${result.done ? "done" : "stopped"} in ${result.steps} steps]`);
+console.log(`\n[${result.done ? "done" : result.modelError ? "model error" : "stopped"} after ${result.steps} steps]`);
 console.log(`Model summary: ${result.summary}`);
 console.log(`Files changed (recorded by the agent): ${result.changed.length ? result.changed.join(", ") : "none"}`);
 console.log(`Verified by a passing test run after the last change: ${result.verified ? "yes" : "NO"}`);

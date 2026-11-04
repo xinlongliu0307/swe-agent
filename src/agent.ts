@@ -12,7 +12,14 @@ Never write tool results yourself: after making tool calls, stop and wait for th
  * `changed` and `verified` are ground truth recorded by the agent, independent of
  * what the model claims. `verified` = finished with a passing test run after the last change.
  */
-export type RunResult = { done: boolean; summary: string; steps: number; changed: string[]; verified: boolean };
+export type RunResult = {
+  done: boolean;
+  summary: string;
+  steps: number;
+  changed: string[];
+  verified: boolean;
+  modelError?: string; // set when the model could not be reached even after retries
+};
 
 /** Shell commands treated as test runs by the finish guard. */
 export const TEST_COMMAND =
@@ -58,7 +65,16 @@ export async function runAgent(opts: {
   log?.write("task", { task, maxSteps });
 
   for (let step = 1; step <= maxSteps; step++) {
-    const reply = await llm.chat(messages, tools);
+    let reply;
+    try {
+      reply = await llm.chat(messages, tools);
+    } catch (err) {
+      // Keep the work done so far and the step count instead of losing them.
+      const modelError = (err as Error).message;
+      log?.write("model_error", { step, modelError });
+      onEvent("error", `MODEL: ${modelError}`);
+      return { done: false, summary: `Model error at step ${step}: ${modelError}`, steps: step - 1, changed: [...changed], verified: false, modelError };
+    }
     messages.push(reply);
     log?.write("assistant", reply);
     if (reply.content) onEvent("assistant", reply.content);

@@ -57,7 +57,7 @@ test("editing the tests to pass is not accepted", async () => {
 });
 
 test("summarise computes pass rate and false claims", () => {
-  const base = { steps: 4, toolErrors: 0, guardRefusals: 0, verified: false, changed: [], seconds: 1, checkOutput: "", summary: "", finished: true };
+  const base = { steps: 4, toolErrors: 0, guardRefusals: 0, verified: false, modelError: false, changed: [], seconds: 1, checkOutput: "", summary: "", finished: true };
   const s = summarise([
     { ...base, task: "a", rep: 1, solved: true, falseClaim: false },
     { ...base, task: "a", rep: 2, solved: false, falseClaim: true },

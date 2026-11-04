@@ -24,6 +24,7 @@ export type EvalRecord = {
   solved: boolean; // check.sh exited 0 after the run
   finished: boolean; // the model called finish
   falseClaim: boolean; // called finish, but the check failed
+  modelError: boolean; // the model was unreachable; an infrastructure failure, not an agent one
   steps: number;
   toolErrors: number;
   guardRefusals: number; // finish attempts the guard refused
@@ -61,7 +62,7 @@ export async function runTask(
   const task = path.basename(taskDir);
   const rep = opts.rep ?? 1;
   const work = await prepareWorkdir(taskDir);
-  const base = { task, rep, finished: false, falseClaim: false, steps: 0, toolErrors: 0, guardRefusals: 0, verified: false, changed: [], seconds: 0, summary: "" };
+  const base = { task, rep, finished: false, falseClaim: false, modelError: false, steps: 0, toolErrors: 0, guardRefusals: 0, verified: false, changed: [], seconds: 0, summary: "" };
   try {
     const before = await runCheck(taskDir, work);
     if (before.ok) return { ...base, solved: false, checkOutput: "", invalid: "check.sh passes before the agent runs" };
@@ -86,7 +87,7 @@ export async function runTask(
         },
       });
     } catch (err) {
-      res = { done: false, summary: `model error: ${(err as Error).message}`, steps: 0, changed: [], verified: false };
+      res = { done: false, summary: `model error: ${(err as Error).message}`, steps: 0, changed: [], verified: false, modelError: String(err) };
     }
     const seconds = Math.round((Date.now() - start) / 1000);
     const after = await runCheck(taskDir, work);
@@ -96,6 +97,7 @@ export async function runTask(
       solved: after.ok,
       finished: res.done,
       falseClaim: res.done && !after.ok,
+      modelError: Boolean(res.modelError),
       steps: res.steps,
       toolErrors,
       guardRefusals,
@@ -128,6 +130,7 @@ export function summarise(records: EvalRecord[]) {
     solved,
     passRate: valid.length ? +(solved / valid.length).toFixed(3) : 0,
     falseClaims: valid.filter((r) => r.falseClaim).length,
+    modelErrors: valid.filter((r) => r.modelError).length,
     invalidTasks: [...new Set(records.filter((r) => r.invalid).map((r) => r.task))],
     rows,
   };
@@ -155,7 +158,7 @@ async function main() {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const logDir = path.join(repoRoot, "runs", `eval-${stamp}`);
-  const llm = makeLLM(process.env);
+  const llm = makeLLM(process.env, (attempt, reason) => process.stdout.write(`[retry ${attempt}: ${reason}] `));
   const repeat = Number(values.repeat);
   const records: EvalRecord[] = [];
 
@@ -172,7 +175,7 @@ async function main() {
       console.log(
         r.invalid
           ? `INVALID (${r.invalid})`
-          : `${r.solved ? "PASS" : "FAIL"}  steps=${r.steps} errors=${r.toolErrors} refused=${r.guardRefusals} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}`,
+          : `${r.solved ? "PASS" : "FAIL"}${r.modelError ? " (MODEL ERROR)" : ""}  steps=${r.steps} errors=${r.toolErrors} refused=${r.guardRefusals} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}`,
       );
     }
   }
@@ -181,7 +184,7 @@ async function main() {
   console.log("");
   console.table(summary.rows);
   console.log(
-    `Solved ${summary.solved}/${summary.runs} (${(summary.passRate * 100).toFixed(0)}%), false claims: ${summary.falseClaims}` +
+    `Solved ${summary.solved}/${summary.runs} (${(summary.passRate * 100).toFixed(0)}%), false claims: ${summary.falseClaims}, model errors: ${summary.modelErrors}` +
       (summary.invalidTasks.length ? `, invalid tasks: ${summary.invalidTasks.join(", ")}` : ""),
   );
   const report = path.join(repoRoot, "runs", `eval-${stamp}.json`);

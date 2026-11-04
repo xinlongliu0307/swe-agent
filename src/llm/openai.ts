@@ -1,16 +1,19 @@
 import type { AssistantMessage, LLM, Message, Tool, ToolCall } from "../types.ts";
 import { parseTextToolCalls } from "./textToolCalls.ts";
+import { postJson, type RetryOptions } from "./http.ts";
 
 /** Client for any OpenAI-compatible /chat/completions endpoint (Ollama, vLLM, hosted APIs). */
 export class OpenAICompatible implements LLM {
   baseUrl: string;
   model: string;
   apiKey: string;
+  retry: RetryOptions;
 
-  constructor(opts: { baseUrl: string; model: string; apiKey?: string }) {
+  constructor(opts: { baseUrl: string; model: string; apiKey?: string; retry?: RetryOptions }) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.model = opts.model;
     this.apiKey = opts.apiKey ?? "";
+    this.retry = opts.retry ?? { timeoutMs: 240_000, retries: 3, backoffMs: 2000 };
   }
 
   async chat(messages: Message[], tools: Tool[]): Promise<AssistantMessage> {
@@ -22,16 +25,12 @@ export class OpenAICompatible implements LLM {
         function: { name: t.name, description: t.description, parameters: t.parameters },
       })),
     };
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${await res.text()}`);
-    const data = (await res.json()) as any;
+    const data = await postJson(
+      `${this.baseUrl}/chat/completions`,
+      this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+      body,
+      this.retry,
+    );
     const msg = data.choices?.[0]?.message ?? {};
     // Clean first, so JSON inside an invented tool result is never executed.
     let content: string = stripTemplateTokens(msg.content ?? "");

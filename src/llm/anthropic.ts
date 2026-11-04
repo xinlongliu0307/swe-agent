@@ -1,4 +1,5 @@
 import type { AssistantMessage, LLM, Message, Tool } from "../types.ts";
+import { postJson, type RetryOptions } from "./http.ts";
 
 /** Client for the Anthropic Messages API, translating to and from the internal format. */
 export class Anthropic implements LLM {
@@ -6,33 +7,30 @@ export class Anthropic implements LLM {
   apiKey: string;
   baseUrl: string;
   maxTokens: number;
+  retry: RetryOptions;
 
-  constructor(opts: { model: string; apiKey: string; baseUrl?: string; maxTokens?: number }) {
+  constructor(opts: { model: string; apiKey: string; baseUrl?: string; maxTokens?: number; retry?: RetryOptions }) {
     this.model = opts.model;
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
     this.maxTokens = opts.maxTokens ?? 8192;
+    this.retry = opts.retry ?? { timeoutMs: 240_000, retries: 3, backoffMs: 2000 };
   }
 
   async chat(messages: Message[], tools: Tool[]): Promise<AssistantMessage> {
     const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
+    const data = (await postJson(
+      `${this.baseUrl}/v1/messages`,
+      { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" },
+      {
         model: this.model,
         max_tokens: this.maxTokens,
         system,
         messages: toWire(messages),
         tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
-      }),
-    });
-    if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${await res.text()}`);
-    const data = (await res.json()) as { content: any[] };
+      },
+      this.retry,
+    )) as { content: any[] };
     return {
       role: "assistant",
       content: data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n"),
