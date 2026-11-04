@@ -29,10 +29,13 @@ test("every task's check fails before the agent runs (tasks are valid)", async (
 test("a correct fix is judged solved", async () => {
   const llm = scripted([
     call("edit_file", { path: "calc.py", old_str: "(len(xs) - 1)", new_str: "len(xs)" }),
+    call("run_shell", { command: "python3 -m unittest -q" }),
     call("finish", { summary: "fixed" }),
   ]);
   const r = await runTask(fixMean, llm);
   assert.equal(r.solved, true);
+  assert.equal(r.verified, true);
+  assert.equal(r.guardRefusals, 0);
   assert.equal(r.falseClaim, false);
   assert.deepEqual(r.changed, ["calc.py"]);
 });
@@ -54,7 +57,7 @@ test("editing the tests to pass is not accepted", async () => {
 });
 
 test("summarise computes pass rate and false claims", () => {
-  const base = { steps: 4, toolErrors: 0, changed: [], seconds: 1, checkOutput: "", summary: "", finished: true };
+  const base = { steps: 4, toolErrors: 0, guardRefusals: 0, verified: false, changed: [], seconds: 1, checkOutput: "", summary: "", finished: true };
   const s = summarise([
     { ...base, task: "a", rep: 1, solved: true, falseClaim: false },
     { ...base, task: "a", rep: 2, solved: false, falseClaim: true },

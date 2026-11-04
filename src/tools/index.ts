@@ -17,7 +17,9 @@ export function runCommand(
   timeoutMs = 60_000,
 ): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, timeout: timeoutMs, killSignal: "SIGKILL" });
+    // No .pyc caching: a same-size edit within one second would otherwise run stale bytecode.
+    const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+    const child = spawn(cmd, args, { cwd, env, timeout: timeoutMs, killSignal: "SIGKILL" });
     let output = "";
     child.stdout.on("data", (d) => (output += d));
     child.stderr.on("data", (d) => (output += d));

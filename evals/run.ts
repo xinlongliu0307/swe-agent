@@ -26,6 +26,8 @@ export type EvalRecord = {
   falseClaim: boolean; // called finish, but the check failed
   steps: number;
   toolErrors: number;
+  guardRefusals: number; // finish attempts the guard refused
+  verified: boolean; // agent saw passing tests after its last change
   changed: string[];
   seconds: number;
   checkOutput: string;
@@ -59,7 +61,7 @@ export async function runTask(
   const task = path.basename(taskDir);
   const rep = opts.rep ?? 1;
   const work = await prepareWorkdir(taskDir);
-  const base = { task, rep, finished: false, falseClaim: false, steps: 0, toolErrors: 0, changed: [], seconds: 0, summary: "" };
+  const base = { task, rep, finished: false, falseClaim: false, steps: 0, toolErrors: 0, guardRefusals: 0, verified: false, changed: [], seconds: 0, summary: "" };
   try {
     const before = await runCheck(taskDir, work);
     if (before.ok) return { ...base, solved: false, checkOutput: "", invalid: "check.sh passes before the agent runs" };
@@ -67,6 +69,7 @@ export async function runTask(
     const instruction = (await fs.readFile(path.join(taskDir, "task.md"), "utf8")).trim();
     const log = opts.logDir ? new SessionLog(path.join(opts.logDir, `${task}-${rep}`), work) : undefined;
     let toolErrors = 0;
+    let guardRefusals = 0;
     const start = Date.now();
     let res: RunResult;
     try {
@@ -79,10 +82,11 @@ export async function runTask(
         log,
         onEvent: (kind) => {
           if (kind === "error") toolErrors++;
+          if (kind === "guard") guardRefusals++;
         },
       });
     } catch (err) {
-      res = { done: false, summary: `model error: ${(err as Error).message}`, steps: 0, changed: [] };
+      res = { done: false, summary: `model error: ${(err as Error).message}`, steps: 0, changed: [], verified: false };
     }
     const seconds = Math.round((Date.now() - start) / 1000);
     const after = await runCheck(taskDir, work);
@@ -94,6 +98,8 @@ export async function runTask(
       falseClaim: res.done && !after.ok,
       steps: res.steps,
       toolErrors,
+      guardRefusals,
+      verified: res.verified,
       changed: res.changed,
       seconds,
       checkOutput: after.output,
@@ -114,6 +120,7 @@ export function summarise(records: EvalRecord[]) {
     solved: `${rs.filter((r) => r.solved).length}/${rs.length}`,
     meanSteps: +(rs.reduce((s, r) => s + r.steps, 0) / rs.length).toFixed(1),
     toolErrors: rs.reduce((s, r) => s + r.toolErrors, 0),
+    refusals: rs.reduce((s, r) => s + r.guardRefusals, 0),
     falseClaims: rs.filter((r) => r.falseClaim).length,
   }));
   return {
@@ -165,7 +172,7 @@ async function main() {
       console.log(
         r.invalid
           ? `INVALID (${r.invalid})`
-          : `${r.solved ? "PASS" : "FAIL"}  steps=${r.steps} errors=${r.toolErrors} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}`,
+          : `${r.solved ? "PASS" : "FAIL"}  steps=${r.steps} errors=${r.toolErrors} refused=${r.guardRefusals} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}`,
       );
     }
   }

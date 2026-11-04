@@ -48,7 +48,8 @@ test("agent loop writes, edits, runs shell, then finishes", async () => {
     call("run_shell", { command: "cat hello.py" }),
     call("finish", { summary: "created hello.py" }),
   ]);
-  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws) });
+  // cat is not a test run, so this loop test turns the finish guard off.
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false });
   assert.equal(res.done, true);
   assert.equal(res.steps, 4);
   assert.deepEqual(res.changed, ["hello.py"]); // recorded by the agent, not claimed by the model
@@ -117,4 +118,54 @@ test("failed edits are not recorded as changes", async () => {
   const llm = scripted([call("edit_file", { path: "a.txt", old_str: "zzz", new_str: "y" }), call("finish", { summary: "changed a.txt" })]);
   const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws) });
   assert.deepEqual(res.changed, []);
+});
+
+// ---- finish guard ----
+const sandboxWithTest = async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "calc.py"), "def double(x):\n    return x * 3\n");
+  await fs.writeFile(
+    path.join(ws, "test_calc.py"),
+    "import unittest\nfrom calc import double\n\nclass T(unittest.TestCase):\n    def test_double(self):\n        self.assertEqual(double(2), 4)\n\nif __name__ == '__main__':\n    unittest.main()\n",
+  );
+  return ws;
+};
+const fixDouble = call("edit_file", { path: "calc.py", old_str: "x * 3", new_str: "x * 2" });
+const runTests = call("run_shell", { command: "python3 -m unittest -q" });
+
+test("guard refuses finish after an edit with no test run, then accepts once tests pass", async () => {
+  const ws = await sandboxWithTest();
+  const guard: string[] = [];
+  const llm = scripted([fixDouble, call("finish", { summary: "done" }), runTests, call("finish", { summary: "done" })]);
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k, t) => k === "guard" && guard.push(t) });
+  assert.equal(guard.length, 1);
+  assert.match(guard[0] ?? "", /no tests have been run/);
+  assert.equal(res.done, true);
+  assert.equal(res.verified, true);
+});
+
+test("guard refuses finish when the latest test run failed", async () => {
+  const ws = await sandboxWithTest();
+  const guard: string[] = [];
+  const llm = scripted([runTests, call("finish", { summary: "done" }), fixDouble, runTests, call("finish", { summary: "done" })]);
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k, t) => k === "guard" && guard.push(t) });
+  assert.match(guard[0] ?? "", /latest test run failed \(exit code 1\)/);
+  assert.equal(res.verified, true);
+});
+
+test("non-test shell commands do not count as verification", async () => {
+  const ws = await sandboxWithTest();
+  const guard: string[] = [];
+  const llm = scripted([fixDouble, call("run_shell", { command: "cat calc.py" }), call("finish", { summary: "done" }), runTests, call("finish", { summary: "done" })]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k, t) => k === "guard" && guard.push(t) });
+  assert.equal(guard.length, 1);
+});
+
+test("after repeated refusals finish is accepted but marked unverified", async () => {
+  const ws = await sandboxWithTest();
+  const llm = scripted([fixDouble, call("finish", { summary: "a" }), call("finish", { summary: "b" }), call("finish", { summary: "c" })]);
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws) });
+  assert.equal(res.done, true);
+  assert.equal(res.steps, 4);
+  assert.equal(res.verified, false);
 });

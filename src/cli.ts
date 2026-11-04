@@ -48,6 +48,7 @@ try {
         kind === "tool" ? `  > ${text}`
         : kind === "error" ? `  ! ${text}`
         : kind === "result" ? `    = ${text}`
+        : kind === "guard" ? `  ? ${text}`
         : `\n${text}`,
       ),
   });
@@ -66,4 +67,5 @@ rl.close();
 console.log(`\n[${result.done ? "done" : "stopped"} in ${result.steps} steps]`);
 console.log(`Model summary: ${result.summary}`);
 console.log(`Files changed (recorded by the agent): ${result.changed.length ? result.changed.join(", ") : "none"}`);
+console.log(`Verified by a passing test run after the last change: ${result.verified ? "yes" : "NO"}`);
 console.log(`log: ${path.relative(process.cwd(), log.file)}`);
