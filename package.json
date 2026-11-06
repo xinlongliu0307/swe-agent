@@ -10,6 +10,7 @@
     "typecheck": "tsc -p .",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "eval": "node --disable-warning=ExperimentalWarning evals/run.ts",
+    "trace": "node --disable-warning=ExperimentalWarning evals/trace.ts",
     "check": "npm run typecheck && npm test"
   },
   "devDependencies": {

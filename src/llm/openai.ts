@@ -29,6 +29,7 @@ export class OpenAICompatible implements LLM {
       // Only sent when set, so provider defaults apply otherwise.
       ...(this.sampling.temperature !== undefined ? { temperature: this.sampling.temperature } : {}),
       ...(this.sampling.seed !== undefined ? { seed: this.sampling.seed } : {}),
+      ...(this.sampling.maxTokens !== undefined ? { max_tokens: this.sampling.maxTokens } : {}),
     };
     const data = await postJson(
       `${this.baseUrl}/chat/completions`,
@@ -37,6 +38,7 @@ export class OpenAICompatible implements LLM {
       this.retry,
     );
     const msg = data.choices?.[0]?.message ?? {};
+    const cutOff = data.choices?.[0]?.finish_reason === "length";
     let parseErrors: string[] = [];
     // Clean first, so JSON inside an invented tool result is never executed.
     let content: string = stripTemplateTokens(msg.content ?? "");
@@ -55,6 +57,12 @@ export class OpenAICompatible implements LLM {
         toolCalls = parsed.calls;
         content = parsed.rest;
       }
+    }
+    if (cutOff && !toolCalls.length) {
+      parseErrors.push(
+        `the reply was cut off at the ${this.sampling.maxTokens ?? "output"} token limit before a complete tool call; ` +
+          "send a shorter call, e.g. edit_file with a small old_str/new_str instead of rewriting a whole file",
+      );
     }
     return { role: "assistant", content: content.trim(), toolCalls, ...(parseErrors.length ? { parseErrors } : {}) };
   }

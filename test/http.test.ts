@@ -78,5 +78,21 @@ test("sampling settings are sent only when set", async () => {
   assert.equal("seed" in bodies[0], false);
   assert.equal(bodies[1].temperature, 0.3);
   assert.equal(bodies[1].seed, 1001);
-  assert.deepEqual(samplingFromEnv({ SWE_TEMPERATURE: "", SWE_SEED: undefined }), { temperature: undefined, seed: undefined });
+  assert.deepEqual(samplingFromEnv({ SWE_TEMPERATURE: "", SWE_SEED: undefined }), { temperature: undefined, seed: undefined, maxTokens: 2048 });
+});
+
+test("replies are capped by default and a cut-off reply is reported to the agent", async () => {
+  const { OpenAICompatible } = await import("../src/llm/openai.ts");
+  const { samplingFromEnv, DEFAULT_MAX_TOKENS } = await import("../src/llm/http.ts");
+  const { defaultTools } = await import("../src/tools/index.ts");
+  let sent: any;
+  globalThis.fetch = (async (_u: string, init: RequestInit) => {
+    sent = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({ choices: [{ finish_reason: "length", message: { content: '{"name": "write_file", "arguments": {"path": "a.py", "content": "x = 1\\nx = 1\\nx = 1' } }] }));
+  }) as typeof fetch;
+  const llm = new OpenAICompatible({ baseUrl: "http://x/v1", model: "m", sampling: samplingFromEnv({}) });
+  const reply = await llm.chat([], defaultTools);
+  assert.equal(sent.max_tokens, DEFAULT_MAX_TOKENS);
+  assert.equal(reply.toolCalls?.length, 0);
+  assert.ok(reply.parseErrors?.some((e) => /cut off at the 2048 token limit/.test(e)));
 });

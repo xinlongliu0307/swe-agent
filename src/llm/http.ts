@@ -15,11 +15,22 @@ export function retryOptionsFromEnv(env: NodeJS.ProcessEnv): RetryOptions {
 }
 
 /** Sampling controls; unset fields leave the provider's defaults in place. */
-export type Sampling = { temperature?: number; seed?: number };
+export type Sampling = { temperature?: number; seed?: number; maxTokens?: number };
+
+/**
+ * Default cap on reply length. Without one, a model that falls into repeating
+ * itself generates until the request times out (and, with a fixed seed, does the
+ * same on every retry). 2048 tokens is ample for a tool call or an edit.
+ */
+export const DEFAULT_MAX_TOKENS = 2048;
 
 export function samplingFromEnv(env: NodeJS.ProcessEnv): Sampling {
   const num = (v: string | undefined) => (v === undefined || v === "" ? undefined : Number(v));
-  return { temperature: num(env.SWE_TEMPERATURE), seed: num(env.SWE_SEED) };
+  return {
+    temperature: num(env.SWE_TEMPERATURE),
+    seed: num(env.SWE_SEED),
+    maxTokens: num(env.SWE_MAX_TOKENS) ?? DEFAULT_MAX_TOKENS,
+  };
 }
 
 const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);

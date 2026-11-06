@@ -17,6 +17,7 @@ export class Anthropic implements LLM {
     this.maxTokens = opts.maxTokens ?? 8192;
     this.retry = opts.retry ?? { timeoutMs: 240_000, retries: 3, backoffMs: 2000 };
     this.sampling = opts.sampling ?? {};
+    if (opts.maxTokens === undefined && this.sampling.maxTokens !== undefined) this.maxTokens = this.sampling.maxTokens;
   }
 
   async chat(messages: Message[], tools: Tool[]): Promise<AssistantMessage> {
