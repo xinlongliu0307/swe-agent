@@ -1,5 +1,5 @@
 import type { AssistantMessage, LLM, Message, Tool } from "../types.ts";
-import { postJson, type RetryOptions } from "./http.ts";
+import { postJson, type RetryOptions, type Sampling } from "./http.ts";
 
 /** Client for the Anthropic Messages API, translating to and from the internal format. */
 export class Anthropic implements LLM {
@@ -8,13 +8,15 @@ export class Anthropic implements LLM {
   baseUrl: string;
   maxTokens: number;
   retry: RetryOptions;
+  sampling: Sampling;
 
-  constructor(opts: { model: string; apiKey: string; baseUrl?: string; maxTokens?: number; retry?: RetryOptions }) {
+  constructor(opts: { model: string; apiKey: string; baseUrl?: string; maxTokens?: number; retry?: RetryOptions; sampling?: Sampling }) {
     this.model = opts.model;
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
     this.maxTokens = opts.maxTokens ?? 8192;
     this.retry = opts.retry ?? { timeoutMs: 240_000, retries: 3, backoffMs: 2000 };
+    this.sampling = opts.sampling ?? {};
   }
 
   async chat(messages: Message[], tools: Tool[]): Promise<AssistantMessage> {
@@ -28,6 +30,8 @@ export class Anthropic implements LLM {
         system,
         messages: toWire(messages),
         tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+        // The Messages API has no seed parameter; temperature only.
+        ...(this.sampling.temperature !== undefined ? { temperature: this.sampling.temperature } : {}),
       },
       this.retry,
     )) as { content: any[] };

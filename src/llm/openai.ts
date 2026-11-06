@@ -1,6 +1,6 @@
 import type { AssistantMessage, LLM, Message, Tool, ToolCall } from "../types.ts";
 import { parseTextToolCalls } from "./textToolCalls.ts";
-import { postJson, type RetryOptions } from "./http.ts";
+import { postJson, type RetryOptions, type Sampling } from "./http.ts";
 
 /** Client for any OpenAI-compatible /chat/completions endpoint (Ollama, vLLM, hosted APIs). */
 export class OpenAICompatible implements LLM {
@@ -8,12 +8,14 @@ export class OpenAICompatible implements LLM {
   model: string;
   apiKey: string;
   retry: RetryOptions;
+  sampling: Sampling;
 
-  constructor(opts: { baseUrl: string; model: string; apiKey?: string; retry?: RetryOptions }) {
+  constructor(opts: { baseUrl: string; model: string; apiKey?: string; retry?: RetryOptions; sampling?: Sampling }) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.model = opts.model;
     this.apiKey = opts.apiKey ?? "";
     this.retry = opts.retry ?? { timeoutMs: 240_000, retries: 3, backoffMs: 2000 };
+    this.sampling = opts.sampling ?? {};
   }
 
   async chat(messages: Message[], tools: Tool[]): Promise<AssistantMessage> {
@@ -24,6 +26,9 @@ export class OpenAICompatible implements LLM {
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.parameters },
       })),
+      // Only sent when set, so provider defaults apply otherwise.
+      ...(this.sampling.temperature !== undefined ? { temperature: this.sampling.temperature } : {}),
+      ...(this.sampling.seed !== undefined ? { seed: this.sampling.seed } : {}),
     };
     const data = await postJson(
       `${this.baseUrl}/chat/completions`,

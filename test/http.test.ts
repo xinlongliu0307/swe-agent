@@ -63,3 +63,20 @@ test("agent keeps steps and changes when the model becomes unreachable", async (
   assert.equal(res.steps, 1);
   assert.match(res.modelError ?? "", /fetch failed/);
 });
+
+test("sampling settings are sent only when set", async () => {
+  const { OpenAICompatible } = await import("../src/llm/openai.ts");
+  const { samplingFromEnv } = await import("../src/llm/http.ts");
+  const bodies: any[] = [];
+  globalThis.fetch = (async (_u: string, init: RequestInit) => {
+    bodies.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }));
+  }) as typeof fetch;
+  await new OpenAICompatible({ baseUrl: "http://x/v1", model: "m" }).chat([], []);
+  await new OpenAICompatible({ baseUrl: "http://x/v1", model: "m", sampling: samplingFromEnv({ SWE_TEMPERATURE: "0.3", SWE_SEED: "1001" }) }).chat([], []);
+  assert.equal("temperature" in bodies[0], false);
+  assert.equal("seed" in bodies[0], false);
+  assert.equal(bodies[1].temperature, 0.3);
+  assert.equal(bodies[1].seed, 1001);
+  assert.deepEqual(samplingFromEnv({ SWE_TEMPERATURE: "", SWE_SEED: undefined }), { temperature: undefined, seed: undefined });
+});

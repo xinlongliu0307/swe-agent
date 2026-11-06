@@ -4,6 +4,10 @@
 //   npm run eval                          all tasks once
 //   npm run eval -- --tasks fix-mean,fix-temperature --repeat 3
 //   npm run eval -- --max-steps 15 --keep  (keep work dirs for inspection)
+//
+// Sampling is fixed by default so that two versions of the agent face the same
+// randomness: temperature 0.3 and seed = base seed + repeat number. Use
+// --temperature default to fall back to the provider's own settings.
 
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -168,6 +172,8 @@ async function main() {
       repeat: { type: "string", default: "1" },
       "max-steps": { type: "string", default: "20" },
       keep: { type: "boolean", default: false },
+      temperature: { type: "string", default: "0.3" },
+      seed: { type: "string", default: "1000" },
     },
   });
   const all = (await fs.readdir(TASKS_DIR)).sort();
@@ -177,8 +183,18 @@ async function main() {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const logDir = path.join(repoRoot, "runs", `eval-${stamp}`);
-  const llm = makeLLM(process.env, (attempt, reason) => process.stdout.write(`[retry ${attempt}: ${reason}] `));
+  const onRetry = (attempt: number, reason: string) => process.stdout.write(`[retry ${attempt}: ${reason}] `);
+  const fixed = values.temperature !== "default";
+  const sampling = fixed ? { temperature: Number(values.temperature), baseSeed: Number(values.seed) } : null;
+  // One client per repeat: repeat r always uses seed baseSeed + r, so runs are comparable across versions.
+  const llmFor = (rep: number) =>
+    makeLLM(
+      fixed ? { ...process.env, SWE_TEMPERATURE: String(sampling!.temperature), SWE_SEED: String(sampling!.baseSeed + rep) } : process.env,
+      onRetry,
+    );
+  const llm = llmFor(1);
   const repeat = Number(values.repeat);
+  console.log(fixed ? `Sampling: temperature ${sampling!.temperature}, seeds ${sampling!.baseSeed + 1}..${sampling!.baseSeed + repeat}` : "Sampling: provider defaults (not reproducible)");
   const records: EvalRecord[] = [];
 
   process.stdout.write("Checking the model endpoint ... ");
@@ -194,7 +210,7 @@ async function main() {
   outer: for (const name of names) {
     for (let rep = 1; rep <= repeat; rep++) {
       process.stdout.write(`${name} #${rep} ... `);
-      const r = await runTask(path.join(TASKS_DIR, name), llm, {
+      const r = await runTask(path.join(TASKS_DIR, name), llmFor(rep), {
         rep,
         maxSteps: Number(values["max-steps"]),
         logDir,
@@ -225,7 +241,7 @@ async function main() {
   await fs.mkdir(path.dirname(report), { recursive: true });
   await fs.writeFile(
     report,
-    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, aborted, summary, records }, null, 2),
+    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, sampling, aborted, summary, records }, null, 2),
   );
   console.log(`report: ${path.relative(process.cwd(), report)}`);
 }

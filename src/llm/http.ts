@@ -14,6 +14,14 @@ export function retryOptionsFromEnv(env: NodeJS.ProcessEnv): RetryOptions {
   };
 }
 
+/** Sampling controls; unset fields leave the provider's defaults in place. */
+export type Sampling = { temperature?: number; seed?: number };
+
+export function samplingFromEnv(env: NodeJS.ProcessEnv): Sampling {
+  const num = (v: string | undefined) => (v === undefined || v === "" ? undefined : Number(v));
+  return { temperature: num(env.SWE_TEMPERATURE), seed: num(env.SWE_SEED) };
+}
+
 const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 
 /**
