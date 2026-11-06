@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { LLM, Message, Tool, ToolContext } from "./types.ts";
 import { truncate } from "./workspace.ts";
 import type { SessionLog } from "./log.ts";
@@ -38,8 +40,15 @@ export async function runAgent(opts: {
   onEvent?: (kind: string, text: string) => void;
   /** Refuse finish until tests pass after the last change (default true). */
   finishGuard?: boolean;
+  /** Refuse edits to existing files not read in an earlier step (default true). */
+  readBeforeEdit?: boolean;
 }): Promise<RunResult> {
-  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true } = opts;
+  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true } = opts;
+  // Files whose current contents the model has seen in an earlier step (read, written or edited).
+  const known = new Set<string>();
+  const norm = (p: unknown) => (typeof p === "string" ? path.normalize(p) : "");
+  // Set when an edit or write fails, cleared when one succeeds.
+  let lastEditError: string | null = null;
   const byName = new Map(tools.map((t) => [t.name, t]));
   const changed = new Set<string>();
   // Finish-guard state: did files change since the last test run, and how did that run end?
@@ -47,6 +56,8 @@ export async function runAgent(opts: {
   let lastTestExit: number | null = null;
   let refusals = 0;
   const guardReason = (): string | null => {
+    if (lastEditError && changed.size === 0)
+      return `Your last edit did not apply (${truncate(lastEditError, 160)}), so no file has been changed. Fix the edit, run the tests, then call finish.`;
     if (changedSinceTest)
       return lastTestExit === null
         ? "Files were changed but no tests have been run. Run the project's tests and check they pass, then call finish."
@@ -95,7 +106,17 @@ export async function runAgent(opts: {
     }
 
     const seen = new Set<string>();
+    const seenThisReply: string[] = []; // files read in this reply only become "known" after it
+    let failedCall: string | null = null;
     for (const call of reply.toolCalls) {
+      // Calls after a failure were planned assuming it succeeded (e.g. run tests after an edit
+      // that did not apply), so they are not run.
+      if (failedCall) {
+        const msg = `Not run: an earlier call in this reply (${failedCall}) failed. Read its error, then decide the next step.`;
+        messages.push({ role: "tool", content: msg, toolCallId: call.id, name: call.name });
+        log?.write("skipped", { name: call.name, args: call.arguments, after: failedCall });
+        continue;
+      }
       const tool = byName.get(call.name);
       let result: string;
       // Local models sometimes repeat the same call in one reply; running it twice
@@ -121,17 +142,31 @@ export async function runAgent(opts: {
         if (!tool) throw new Error(`Unknown tool: ${call.name}`);
         const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
         onEvent("tool", `${call.name} ${truncate(call.arguments, 200)}`);
+        if (readBeforeEdit && (call.name === "edit_file" || call.name === "write_file") && !known.has(norm(args.path))) {
+          const exists = typeof args.path === "string" && fs.existsSync(path.resolve(ctx.workspace, args.path));
+          if (exists)
+            throw new Error(
+              `${call.name} refused: read ${args.path} with read_file first, in a separate step, so the change is based on its actual contents.`,
+            );
+        }
         result = await tool.run(args, ctx);
       } catch (err) {
         result = `ERROR: ${(err as Error).message}`;
       }
-      if (result.startsWith("ERROR:")) onEvent("error", truncate(result, 300));
-      else {
-        if (call.name === "write_file" || call.name === "edit_file") {
-          const p = (JSON.parse(call.arguments) as { path?: unknown }).path;
+      const isEdit = call.name === "write_file" || call.name === "edit_file";
+      if (result.startsWith("ERROR:")) {
+        onEvent("error", truncate(result, 300));
+        if (isEdit) lastEditError = result.slice(7);
+        if (call.name !== "finish") failedCall = call.name;
+      } else {
+        const p = (JSON.parse(call.arguments || "{}") as { path?: unknown }).path;
+        if (isEdit) {
           if (typeof p === "string") changed.add(p);
           changedSinceTest = true;
+          lastEditError = null;
+          known.add(norm(p)); // the write or the returned snippet shows the new contents
         }
+        if (call.name === "read_file") seenThisReply.push(norm(p));
         if (call.name === "run_shell") {
           const command = String((JSON.parse(call.arguments) as { command?: unknown }).command ?? "");
           const exit = /^exit code: (-?\d+)/.exec(result);
@@ -146,11 +181,13 @@ export async function runAgent(opts: {
       messages.push({ role: "tool", content: result, toolCallId: call.id, name: call.name });
       log?.write("tool", { name: call.name, args: call.arguments, result });
       if (call.name === "finish" && tool) {
-        const verified = guardReason() === null && lastTestExit === 0;
+        // Verified only if something changed and the tests passed after the last change.
+        const verified = changed.size > 0 && !changedSinceTest && lastTestExit === 0;
         log?.write("finish", { steps: step, summary: result, changed: [...changed], verified });
         return { done: true, summary: result, steps: step, changed: [...changed], verified };
       }
     }
+    for (const p of seenThisReply) known.add(p);
   }
   log?.write("stopped", { reason: "max steps" });
   return { done: false, summary: `Stopped after ${maxSteps} steps without finish.`, steps: maxSteps, changed: [...changed], verified: false };

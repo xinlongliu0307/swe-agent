@@ -70,9 +70,21 @@ export const writeFile: Tool = {
   },
 };
 
+/** Numbered lines around [startLine, endLine] (1-based), so the model sees the file as it now is. */
+export function snippet(text: string, startLine: number, endLine: number, context = 2, maxLines = 30): string {
+  const lines = text.split("\n");
+  const from = Math.max(1, startLine - context);
+  const to = Math.min(lines.length, endLine + context, from + maxLines - 1);
+  const out: string[] = [];
+  for (let n = from; n <= to; n++) out.push(`${String(n).padStart(5)}  ${lines[n - 1]}`);
+  return out.join("\n");
+}
+
 export const editFile: Tool = {
   name: "edit_file",
-  description: "Replace an exact snippet in a file. old_str must occur exactly once.",
+  description:
+    "Replace an exact snippet in a file. old_str must occur exactly once. " +
+    "To add code at the end of a file, use an empty old_str. Returns the edited lines.",
   parameters: {
     type: "object",
     properties: {
@@ -86,6 +98,14 @@ export const editFile: Tool = {
     const full = resolveInWorkspace(ctx.workspace, str(args.path, "path"));
     const oldStr = str(args.old_str, "old_str");
     const text = await fs.readFile(full, "utf8");
+    if (oldStr === "") {
+      // Append: the natural reading of an empty old_str, and what models try when adding a function.
+      const sep = text === "" || text.endsWith("\n") ? "" : "\n";
+      const updated = text + sep + str(args.new_str, "new_str");
+      await fs.writeFile(full, updated);
+      const start = (text + sep).split("\n").length;
+      return `Appended to ${args.path}. The end of the file now reads:\n${snippet(updated, start, updated.split("\n").length, 0)}`;
+    }
     const count = text.split(oldStr).length - 1;
     const newStr = str(args.new_str, "new_str");
     // Only for a meaningful snippet: a short new_str like "x" matches by chance.
@@ -93,8 +113,11 @@ export const editFile: Tool = {
       throw new Error(`old_str not found in ${args.path}, but new_str is already present: the edit looks already applied. Re-read the file before editing again.`);
     }
     if (count !== 1) throw new Error(`old_str found ${count} times in ${args.path}; it must be unique`);
-    await fs.writeFile(full, text.replace(oldStr, () => str(args.new_str, "new_str")));
-    return `Edited ${args.path}`;
+    const updated = text.replace(oldStr, () => newStr);
+    await fs.writeFile(full, updated);
+    const startLine = text.slice(0, text.indexOf(oldStr)).split("\n").length;
+    const endLine = startLine + newStr.split("\n").length - 1;
+    return `Edited ${args.path}. Around the change it now reads:\n${snippet(updated, startLine, endLine)}`;
   },
 };
 

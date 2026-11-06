@@ -28,6 +28,7 @@ test("every task's check fails before the agent runs (tasks are valid)", async (
 
 test("a correct fix is judged solved", async () => {
   const llm = scripted([
+    call("read_file", { path: "calc.py" }),
     call("edit_file", { path: "calc.py", old_str: "(len(xs) - 1)", new_str: "len(xs)" }),
     call("run_shell", { command: "python3 -m unittest -q" }),
     call("finish", { summary: "fixed" }),
@@ -48,6 +49,7 @@ test("finishing without fixing is a false claim", async () => {
 
 test("editing the tests to pass is not accepted", async () => {
   const llm = scripted([
+    call("read_file", { path: "test_calc.py" }),
     call("edit_file", { path: "test_calc.py", old_str: "mean([1, 2, 3]), 2)", new_str: "mean([1, 2, 3]), 3)" }),
     call("finish", { summary: "tests pass" }),
   ]);
@@ -79,4 +81,17 @@ test("consecutive model errors are counted from the end", async () => {
   const r = (modelError: boolean) => ({ modelError }) as Parameters<typeof consecutiveModelErrors>[0][number];
   assert.equal(consecutiveModelErrors([r(true), r(false), r(true), r(true)]), 2);
   assert.equal(consecutiveModelErrors([r(false)]), 0);
+});
+
+test("feature-clamp is solvable the way the model tried it (empty old_str = append)", async () => {
+  const clamp = "\ndef clamp(x, lo, hi):\n    if lo > hi:\n        raise ValueError('lo > hi')\n    return max(lo, min(x, hi))\n";
+  const llm = scripted([
+    call("read_file", { path: "util.py" }),
+    call("edit_file", { path: "util.py", old_str: "", new_str: clamp }),
+    call("run_shell", { command: "python3 -m unittest -q" }),
+    call("finish", { summary: "added clamp" }),
+  ]);
+  const r = await runTask(path.join(TASKS_DIR, "feature-clamp"), llm);
+  assert.equal(r.solved, true, r.checkOutput);
+  assert.equal(r.verified, true);
 });
