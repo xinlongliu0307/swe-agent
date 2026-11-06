@@ -72,3 +72,33 @@ test("invented tool results are removed and their JSON is never executed", async
   assert.equal(reply.toolCalls?.length, 0);
   assert.equal(reply.content, "Fixing it.");
 });
+
+// ---- broken calls seen in the fix-split-fields loop ----
+test("raw newlines inside a JSON string are repaired, not dropped", () => {
+  const text = 'Fixing it.\n{"name": "write_file", "arguments": {"path": "parse.py", "content": "def split_fields(line):\n    return [f.strip() for f in line.split(\\",\\")]\n"}}';
+  const r = parseTextToolCalls(text, names);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.failures.length, 0);
+  assert.equal(JSON.parse(r.calls[0]!.arguments).content, 'def split_fields(line):\n    return [f.strip() for f in line.split(",")]\n');
+});
+
+test("unescaped quotes are reported as a failed edit_file call", () => {
+  const text = 'We can fix this:  {"name": "edit_file", "arguments": {"path": "parse.py", "old_str": "return line.split(",")", "new_str": "return [f.strip() for f in line.split(",")]"}}';
+  const r = parseTextToolCalls(text, names);
+  assert.equal(r.calls.length, 0);
+  assert.equal(r.failures.length, 1);
+  assert.match(r.failures[0] ?? "", /^edit_file: /);
+});
+
+test("prose that only mentions a tool is not a failure", () => {
+  const r = parseTextToolCalls("I will use edit_file next to change parse.py.", names);
+  assert.deepEqual(r.failures, []);
+});
+
+test("the client passes parse failures on to the agent", async () => {
+  const bad = '{"name": "edit_file", "arguments": {"path": "p.py", "old_str": "a(",")", "new_str": "b"}}';
+  globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ message: { content: bad } }] }))) as typeof fetch;
+  const reply = await new OpenAICompatible({ baseUrl: "http://x/v1", model: "m" }).chat([], defaultTools);
+  assert.equal(reply.toolCalls?.length, 0);
+  assert.equal(reply.parseErrors?.length, 1);
+});

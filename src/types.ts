@@ -10,7 +10,7 @@ export type ToolCall = {
 export type Message =
   | { role: "system"; content: string }
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
+  | { role: "assistant"; content: string; toolCalls?: ToolCall[]; parseErrors?: string[] }
   | { role: "tool"; content: string; toolCallId: string; name: string };
 
 export type AssistantMessage = Extract<Message, { role: "assistant" }>;

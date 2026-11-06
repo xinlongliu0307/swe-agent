@@ -5,20 +5,27 @@ import type { ToolCall } from "../types.ts";
  * instead of the structured `tool_calls` field. Searches anywhere in the
  * text (not just at the start), handles ```json fences and <tool_call> tags,
  * and only accepts names of tools that actually exist.
+ *
+ * Calls that are almost JSON are repaired when the fix is unambiguous (raw
+ * newlines or tabs inside strings). Calls that still cannot be read are
+ * reported in `failures`, so the agent can tell the model instead of
+ * silently ignoring an edit the model believes it made.
  */
 export function parseTextToolCalls(
   text: string,
   toolNames: string[],
-): { calls: ToolCall[]; rest: string } {
+): { calls: ToolCall[]; rest: string; failures: string[] } {
   const names = new Set(toolNames);
   const calls: ToolCall[] = [];
+  const failures: string[] = [];
   const used: Array<[number, number]> = [];
 
   for (const [start, end] of topLevelObjects(text)) {
-    let value: unknown;
-    try {
-      value = JSON.parse(text.slice(start, end));
-    } catch {
+    const raw = text.slice(start, end);
+    const value = parseLenient(raw);
+    if (value === undefined) {
+      const name = mentionedTool(raw, names);
+      if (name) failures.push(`${name}: ${jsonError(raw)}`);
       continue; // braces that are not JSON, e.g. code in prose
     }
     const call = toCall(value, names, calls.length);
@@ -28,13 +35,68 @@ export function parseTextToolCalls(
     }
   }
 
+  // A call whose braces never balance (e.g. an unescaped quote) yields no span at all.
+  if (!calls.length && !failures.length) {
+    const name = mentionedTool(text, names);
+    if (name) failures.push(`${name}: the JSON object is incomplete or its quotes are unbalanced`);
+  }
+
   let rest = text;
   for (const [start, end] of used.reverse()) rest = rest.slice(0, start) + rest.slice(end);
   rest = rest
     .replace(/<\/?tool_call>/g, "")
     .replace(/```(?:json)?\s*```/g, "")
     .trim();
-  return { calls, rest };
+  return { calls, rest, failures };
+}
+
+/** JSON.parse, then one safe repair: escape raw control characters inside strings. */
+function parseLenient(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    try {
+      return JSON.parse(escapeControlCharsInStrings(raw));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function jsonError(raw: string): string {
+  try {
+    JSON.parse(escapeControlCharsInStrings(raw));
+    return "unknown JSON error";
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/** Inside JSON strings, turn literal newlines, carriage returns and tabs into \n, \r, \t. */
+export function escapeControlCharsInStrings(raw: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const c of raw) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      else if (c === "\n") { out += "\\n"; continue; }
+      else if (c === "\r") { out += "\\r"; continue; }
+      else if (c === "\t") { out += "\\t"; continue; }
+    } else if (c === '"') inString = true;
+    out += c;
+  }
+  return out;
+}
+
+/** The known tool a broken call was aiming at, if the text names one in a "name" field. */
+function mentionedTool(text: string, names: Set<string>): string | null {
+  for (const m of text.matchAll(/"?name"?\s*:\s*"([a-z_]+)"/g)) {
+    if (m[1] && names.has(m[1])) return m[1];
+  }
+  return null;
 }
 
 function toCall(value: unknown, names: Set<string>, index: number): ToolCall | null {

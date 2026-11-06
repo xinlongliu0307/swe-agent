@@ -80,6 +80,15 @@ export async function runAgent(opts: {
     if (reply.content) onEvent("assistant", reply.content);
 
     if (!reply.toolCalls?.length) {
+      if (reply.parseErrors?.length) {
+        // The model tried to call a tool but the call was not valid JSON. Say so plainly;
+        // otherwise it assumes the edit happened and blames the environment.
+        const detail = reply.parseErrors.join("; ");
+        onEvent("error", `UNPARSED TOOL CALL: ${truncate(detail, 200)}`);
+        log?.write("parse_error", { errors: reply.parseErrors });
+        messages.push({ role: "user", content: unparsedCallMessage(detail) });
+        continue;
+      }
       // No tool call: nudge once per step rather than silently stopping.
       messages.push({ role: "user", content: "Continue with a tool call, or call finish if the task is complete." });
       continue;
@@ -145,6 +154,14 @@ export async function runAgent(opts: {
   }
   log?.write("stopped", { reason: "max steps" });
   return { done: false, summary: `Stopped after ${maxSteps} steps without finish.`, steps: maxSteps, changed: [...changed], verified: false };
+}
+
+export function unparsedCallMessage(detail: string): string {
+  return [
+    `Your last tool call was NOT executed: it is not valid JSON (${detail}). No file was changed.`,
+    'Send the call again as one JSON object: {"name": "<tool>", "arguments": {...}}.',
+    'Inside JSON strings, escape double quotes as \\" and newlines as \\n. For example: {"name": "edit_file", "arguments": {"path": "a.py", "old_str": "x.split(\\",\\")", "new_str": "[f.strip() for f in x.split(\\",\\")]"}}',
+  ].join("\n");
 }
 
 /** First line of a tool result plus a count of the rest, for the console. */

@@ -169,3 +169,23 @@ test("after repeated refusals finish is accepted but marked unverified", async (
   assert.equal(res.steps, 4);
   assert.equal(res.verified, false);
 });
+
+test("an unparsable tool call gets specific feedback, not the generic nudge", async () => {
+  const ws = await tmp();
+  const errors: string[] = [];
+  let feedback = "";
+  let n = 0;
+  const llm: LLM = {
+    chat: async (messages) => {
+      n++;
+      if (n === 1) return { role: "assistant", content: "", toolCalls: [], parseErrors: ["edit_file: Unexpected token"] };
+      const last = messages.at(-1);
+      if (last?.role === "user") feedback = last.content;
+      return call("finish", { summary: "stop" });
+    },
+  };
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false, onEvent: (k, t) => k === "error" && errors.push(t) });
+  assert.match(errors[0] ?? "", /UNPARSED TOOL CALL: edit_file/);
+  assert.match(feedback, /NOT executed/);
+  assert.match(feedback, /No file was changed/);
+});

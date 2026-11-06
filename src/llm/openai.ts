@@ -32,6 +32,7 @@ export class OpenAICompatible implements LLM {
       this.retry,
     );
     const msg = data.choices?.[0]?.message ?? {};
+    let parseErrors: string[] = [];
     // Clean first, so JSON inside an invented tool result is never executed.
     let content: string = stripTemplateTokens(msg.content ?? "");
     let toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((c: any, i: number) => ({
@@ -44,12 +45,13 @@ export class OpenAICompatible implements LLM {
     }));
     if (!toolCalls.length && content) {
       const parsed = parseTextToolCalls(content, tools.map((t) => t.name));
+      parseErrors = parsed.failures;
       if (parsed.calls.length) {
         toolCalls = parsed.calls;
         content = parsed.rest;
       }
     }
-    return { role: "assistant", content: content.trim(), toolCalls };
+    return { role: "assistant", content: content.trim(), toolCalls, ...(parseErrors.length ? { parseErrors } : {}) };
   }
 }
 
