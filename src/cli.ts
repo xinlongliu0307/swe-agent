@@ -19,12 +19,13 @@ const { values, positionals } = parseArgs({
     workspace: { type: "string", short: "w", default: "." },
     "max-steps": { type: "string" },
     yes: { type: "boolean", short: "y", default: false },
+    test: { type: "string", short: "t" },
   },
 });
 
 const task = positionals.join(" ").trim();
 if (!task) {
-  console.error('Usage: npm run swe -- [-w <repo>] [-y] [--max-steps N] "task description"');
+  console.error('Usage: npm run swe -- [-w <repo>] [-y] [-t "<test command>"] [--max-steps N] "task description"');
   process.exit(2);
 }
 
@@ -43,6 +44,7 @@ try {
     ctx: { workspace, confirm },
     maxSteps: Number(values["max-steps"] ?? process.env.SWE_MAX_STEPS ?? 30),
     log,
+    testCommand: values.test ?? (process.env.SWE_TEST_CMD || undefined),
     onEvent: (kind, text) =>
       console.log(
         kind === "tool" ? `  > ${text}`

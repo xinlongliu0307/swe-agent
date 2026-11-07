@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { LLM, Message, Tool, ToolContext } from "./types.ts";
 import { truncate } from "./workspace.ts";
+import { runCommand } from "./tools/index.ts";
 import type { SessionLog } from "./log.ts";
 
 export const SYSTEM_PROMPT = `You are a careful software engineering agent working inside a code repository.
@@ -42,8 +43,13 @@ export async function runAgent(opts: {
   finishGuard?: boolean;
   /** Refuse edits to existing files not read in an earlier step (default true). */
   readBeforeEdit?: boolean;
+  /**
+   * The project's own test command. When set, the agent runs it itself before accepting
+   * finish, so verification never depends on which command the model chose to run.
+   */
+  testCommand?: string;
 }): Promise<RunResult> {
-  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true } = opts;
+  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true, testCommand } = opts;
   // Files whose current contents the model has seen in an earlier step (read, written or edited).
   const known = new Set<string>();
   const norm = (p: unknown) => (typeof p === "string" ? path.normalize(p) : "");
@@ -58,6 +64,11 @@ export async function runAgent(opts: {
   const guardReason = (): string | null => {
     if (lastEditError && changed.size === 0)
       return `Your last edit did not apply (${truncate(lastEditError, 160)}), so no file has been changed. Fix the edit, run the tests, then call finish.`;
+    if (testCommand)
+      // The agent runs the real tests itself at finish; only the "nothing changed" case is decided here.
+      return changed.size === 0
+        ? "No files were changed. If the task needs code changes, make them. If it truly needs none, call finish again."
+        : null;
     if (changedSinceTest)
       return lastTestExit === null
         ? "Files were changed but no tests have been run. Run the project's tests and check they pass, then call finish."
@@ -71,7 +82,12 @@ export async function runAgent(opts: {
   };
   const messages: Message[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: task },
+    {
+      role: "user",
+      content: testCommand
+        ? `${task}\n\nThis project's tests run with: ${testCommand}\nUse exactly this command to check your work. The agent runs it again before accepting finish.`
+        : task,
+    },
   ];
   log?.write("task", { task, maxSteps });
 
@@ -127,9 +143,20 @@ export async function runAgent(opts: {
         continue;
       }
       seen.add(key);
-      if (call.name === "finish" && tool && finishGuard && refusals < MAX_REFUSALS) {
-        const why = guardReason();
-        if (why) {
+      if (call.name === "finish" && tool && finishGuard) {
+        let why = guardReason();
+        if (testCommand && changed.size > 0) {
+          const run = await runCommand("bash", ["-c", testCommand], ctx.workspace, 120_000);
+          lastTestExit = run.code ?? -1;
+          changedSinceTest = false;
+          log?.write("agent_tests", { command: testCommand, exit: lastTestExit, output: truncate(run.output, 2000) });
+          onEvent("result", `agent ran the tests (${testCommand}): exit code ${lastTestExit}`);
+          if (lastTestExit !== 0 && !why) {
+            const tail = run.output.trim().split("\n").slice(-25).join("\n");
+            why = `The project's tests (${testCommand}) fail when the agent runs them (exit code ${lastTestExit}):\n${tail}`;
+          }
+        }
+        if (why && refusals < MAX_REFUSALS) {
           refusals++;
           const msg = `FINISH REFUSED: ${why}`;
           onEvent("guard", msg);

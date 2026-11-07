@@ -95,3 +95,23 @@ test("feature-clamp is solvable the way the model tried it (empty old_str = appe
   assert.equal(r.solved, true, r.checkOutput);
   assert.equal(r.verified, true);
 });
+
+test("trace feature-median: a test that cannot see median is caught by the agent's own test run", async () => {
+  const median = "\ndef median(xs):\n    s = sorted(xs)\n    n = len(s)\n    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2\n";
+  const llm = scripted([
+    call("read_file", { path: "stats.py" }),
+    call("edit_file", { path: "stats.py", old_str: "", new_str: median }),
+    call("read_file", { path: "test_stats.py" }),
+    call("edit_file", {
+      path: "test_stats.py",
+      old_str: "        self.assertEqual(mean([1, 2, 3]), 2)\n",
+      new_str: "        self.assertEqual(mean([1, 2, 3]), 2)\n\n    def test_median(self):\n        self.assertEqual(median([3, 1, 2]), 2)\n",
+    }),
+    call("finish", { summary: "added median and a test" }), // median is not imported in the test file
+    call("edit_file", { path: "test_stats.py", old_str: "from stats import mean", new_str: "from stats import mean, median" }),
+    call("finish", { summary: "added median and a test" }),
+  ]);
+  const r = await runTask(path.join(TASKS_DIR, "feature-median"), llm, { testCommand: "python3 -m unittest -q" });
+  assert.equal(r.solved, true, r.checkOutput);
+  assert.equal(r.guardRefusals, 1);
+});

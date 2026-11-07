@@ -244,3 +244,26 @@ test("edit_file returns the edited lines; new files need no prior read", async (
   assert.ok(results.includes("Wrote new.py"));
   assert.ok(results.some((r) => r.startsWith("Edited calc.py. Around the change it now reads:")));
 });
+
+// ---- the agent runs the project's own tests at finish ----
+test("with a test command, finish is checked by running the real tests", async () => {
+  const ws = await sandboxWithTest();
+  const guard: string[] = [];
+  let taskText = "";
+  const wrongFix = call("edit_file", { path: "calc.py", old_str: "x * 3", new_str: "x * 4" });
+  const fixAgain = call("edit_file", { path: "calc.py", old_str: "x * 4", new_str: "x * 2" });
+  const replies = [readCalc, wrongFix, call("run_shell", { command: "python3 calc.py" }), call("finish", { summary: "fixed" }), fixAgain, call("finish", { summary: "fixed" })];
+  let i = 0;
+  const llm: LLM = {
+    chat: async (messages) => {
+      if (i === 0) taskText = messages[1]?.content ?? "";
+      return replies[i++] ?? call("finish", { summary: "x" });
+    },
+  };
+  const res = await runAgent({ task: "Fix double", llm, tools: defaultTools, ctx: ctxFor(ws), testCommand: "python3 -m unittest -q", onEvent: (k, t) => k === "guard" && guard.push(t) });
+  assert.match(taskText, /tests run with: python3 -m unittest -q/);
+  assert.equal(guard.length, 1);
+  assert.match(guard[0] ?? "", /fail when the agent runs them \(exit code 1\)/);
+  assert.match(guard[0] ?? "", /AssertionError: 8 != 4/); // the real failure output is shown
+  assert.equal(res.verified, true);
+});

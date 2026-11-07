@@ -9,7 +9,8 @@
 // randomness: temperature 0.3 and seed = base seed + repeat number. Use
 // --temperature default to fall back to the provider's own settings.
 
-import fs from "node:fs/promises";
+import fsp from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -21,6 +22,17 @@ import { makeLLM } from "../src/llm/index.ts";
 import type { LLM } from "../src/types.ts";
 
 export const TASKS_DIR = path.join(import.meta.dirname, "tasks");
+
+/** The visible test suite of every task; a task folder may override it with a test_cmd file. */
+export const DEFAULT_TEST_COMMAND = "python3 -m unittest -q";
+
+export function taskTestCommand(taskDir: string, fallback: string): string {
+  try {
+    return fs.readFileSync(path.join(taskDir, "test_cmd"), "utf8").trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export type EvalRecord = {
   task: string;
@@ -45,8 +57,8 @@ const git = (cwd: string, ...args: string[]) =>
 
 /** Copy repo/ into a fresh git repo in a temp dir. */
 export async function prepareWorkdir(taskDir: string): Promise<string> {
-  const work = await fs.mkdtemp(path.join(os.tmpdir(), `swe-eval-${path.basename(taskDir)}-`));
-  await fs.cp(path.join(taskDir, "repo"), work, { recursive: true });
+  const work = await fsp.mkdtemp(path.join(os.tmpdir(), `swe-eval-${path.basename(taskDir)}-`));
+  await fsp.cp(path.join(taskDir, "repo"), work, { recursive: true });
   await git(work, "init", "-q");
   await git(work, "add", "-A");
   await git(work, "commit", "-qm", "init");
@@ -61,7 +73,7 @@ export async function runCheck(taskDir: string, work: string): Promise<{ ok: boo
 export async function runTask(
   taskDir: string,
   llm: LLM,
-  opts: { rep?: number; maxSteps?: number; logDir?: string; keep?: boolean } = {},
+  opts: { rep?: number; maxSteps?: number; logDir?: string; keep?: boolean; testCommand?: string } = {},
 ): Promise<EvalRecord> {
   const task = path.basename(taskDir);
   const rep = opts.rep ?? 1;
@@ -71,7 +83,7 @@ export async function runTask(
     const before = await runCheck(taskDir, work);
     if (before.ok) return { ...base, solved: false, checkOutput: "", invalid: "check.sh passes before the agent runs" };
 
-    const instruction = (await fs.readFile(path.join(taskDir, "task.md"), "utf8")).trim();
+    const instruction = (await fsp.readFile(path.join(taskDir, "task.md"), "utf8")).trim();
     const log = opts.logDir ? new SessionLog(path.join(opts.logDir, `${task}-${rep}`), work) : undefined;
     let toolErrors = 0;
     let guardRefusals = 0;
@@ -85,6 +97,7 @@ export async function runTask(
         ctx: { workspace: work, confirm: async () => true }, // throwaway copy: auto-approve
         maxSteps: opts.maxSteps ?? 20,
         log,
+        testCommand: opts.testCommand,
         onEvent: (kind) => {
           if (kind === "error") toolErrors++;
           if (kind === "guard") guardRefusals++;
@@ -112,7 +125,7 @@ export async function runTask(
       summary: res.summary.slice(0, 200),
     };
   } finally {
-    if (!opts.keep) await fs.rm(work, { recursive: true, force: true });
+    if (!opts.keep) await fsp.rm(work, { recursive: true, force: true });
   }
 }
 
@@ -174,9 +187,11 @@ async function main() {
       keep: { type: "boolean", default: false },
       temperature: { type: "string", default: "0.3" },
       seed: { type: "string", default: "1000" },
+      "test-cmd": { type: "string", default: DEFAULT_TEST_COMMAND },
+      "no-agent-tests": { type: "boolean", default: false },
     },
   });
-  const all = (await fs.readdir(TASKS_DIR)).sort();
+  const all = (await fsp.readdir(TASKS_DIR)).sort();
   const names = values.tasks ? values.tasks.split(",").map((s) => s.trim()) : all;
   const unknown = names.filter((n) => !all.includes(n));
   if (unknown.length) throw new Error(`Unknown task(s): ${unknown.join(", ")}`);
@@ -210,7 +225,9 @@ async function main() {
   outer: for (const name of names) {
     for (let rep = 1; rep <= repeat; rep++) {
       process.stdout.write(`${name} #${rep} ... `);
-      const r = await runTask(path.join(TASKS_DIR, name), llmFor(rep), {
+      const taskDir = path.join(TASKS_DIR, name);
+      const r = await runTask(taskDir, llmFor(rep), {
+        testCommand: values["no-agent-tests"] ? undefined : taskTestCommand(taskDir, values["test-cmd"]!),
         rep,
         maxSteps: Number(values["max-steps"]),
         logDir,
@@ -238,10 +255,10 @@ async function main() {
       (summary.invalidTasks.length ? `, invalid tasks: ${summary.invalidTasks.join(", ")}` : ""),
   );
   const report = path.join(repoRoot, "runs", `eval-${stamp}.json`);
-  await fs.mkdir(path.dirname(report), { recursive: true });
-  await fs.writeFile(
+  await fsp.mkdir(path.dirname(report), { recursive: true });
+  await fsp.writeFile(
     report,
-    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, sampling, aborted, summary, records }, null, 2),
+    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, sampling, agentTests: !values["no-agent-tests"], aborted, summary, records }, null, 2),
   );
   console.log(`report: ${path.relative(process.cwd(), report)}`);
 }
