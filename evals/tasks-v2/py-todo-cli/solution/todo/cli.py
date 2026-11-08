@@ -12,7 +12,8 @@ def main(argv, path="todo.json"):
     list       return lines like "1. [ ] buy milk" or "2. [x] post letter"
     """
     p = argparse.ArgumentParser(prog="todo")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd")
+    sub.required = True  # works on Python 3.6 too (required= needs 3.7+)
     sub.add_parser("add").add_argument("text")
     sub.add_parser("done").add_argument("n", type=int)
     sub.add_parser("list")
