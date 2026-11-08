@@ -379,3 +379,22 @@ test("run_check runs Python and TypeScript snippets from the repo root and clean
   assert.match(ts, /exit code: 0\nts 42/);
   assert.deepEqual((await fs.readdir(ws)).sort(), ["calc.py", "src"]);
 });
+
+test("tool output has no colour codes, even when FORCE_COLOR is set (as node --test does in a terminal)", async () => {
+  const saved = process.env.FORCE_COLOR;
+  process.env.FORCE_COLOR = "1";
+  try {
+    const ws = await tmp();
+    const out = await runCheck.run({ language: "node", code: 'console.log("n", 42, { ok: true });' }, ctxFor(ws));
+    assert.equal(out.includes("\x1B["), false, JSON.stringify(out));
+    assert.match(out, /n 42 \{ ok: true \}/);
+  } finally {
+    if (saved === undefined) delete process.env.FORCE_COLOR;
+    else process.env.FORCE_COLOR = saved;
+  }
+});
+
+test("stripAnsi removes colour codes and keeps the text", async () => {
+  const { stripAnsi } = await import("../src/tools/index.ts");
+  assert.equal(stripAnsi("ts \x1B[33m42\x1B[39m \x1B[1;31mFAIL\x1B[0m"), "ts 42 FAIL");
+});

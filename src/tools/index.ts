@@ -9,6 +9,11 @@ const str = (v: unknown, name: string): string => {
   return v;
 };
 
+/** Remove terminal colour and cursor codes, in case a program prints them anyway. */
+export function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-9;?]*[ -\/]*[@-~]/g, "");
+}
+
 /** Run a command with a hard timeout; returns combined stdout/stderr and exit code. */
 export function runCommand(
   cmd: string,
@@ -18,15 +23,19 @@ export function runCommand(
 ): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
     // No .pyc caching: a same-size edit within one second would otherwise run stale bytecode.
-    const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+    // No colour: terminal colour codes waste tokens and garble output for the model. FORCE_COLOR
+    // (set by e.g. `node --test` when run in a terminal) overrides NO_COLOR, so it is removed.
+    const { FORCE_COLOR: _drop, ...rest } = process.env;
+    const env = { ...rest, PYTHONDONTWRITEBYTECODE: "1", NO_COLOR: "1" };
     const child = spawn(cmd, args, { cwd, env, timeout: timeoutMs, killSignal: "SIGKILL" });
     let output = "";
     child.stdout.on("data", (d) => (output += d));
     child.stderr.on("data", (d) => (output += d));
     child.on("error", (e) => resolve({ code: -1, output: String(e) }));
-    child.on("close", (code, signal) =>
-      resolve({ code, output: signal ? `${output}\n[killed: ${signal}, timeout ${timeoutMs} ms]` : output }),
-    );
+    child.on("close", (code, signal) => {
+      const clean = stripAnsi(output);
+      resolve({ code, output: signal ? `${clean}\n[killed: ${signal}, timeout ${timeoutMs} ms]` : clean });
+    });
   });
 }
 
