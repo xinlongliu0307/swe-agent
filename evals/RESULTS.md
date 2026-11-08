@@ -5,3 +5,4 @@
 | 2026-11-07 | Mac, local Ollama, seeded t=0.3 (0014 agent runs tests) | 50 | 50 (100%) | 0 | 6.1 | 46 |
 | 2026-11-07 | Mac, local Ollama, seeded t=0.3 (v0.2.0 control) | 50 | NN | - | - | - |
 | 2026-11-08 | qwen2.5-coder:32b, seeded t=0.3, SUITE v2 baseline (0016) | 30 | 9 (30%) | 15 | 11.9 | 130 |
+| 2026-11-08 | SUITE v2 with 0017 (review on, max-steps 20) | 30 | 8 (27%) | 5 | 17.2 | 177 |
