@@ -18,7 +18,7 @@ npm run swe -- -w path/to/repo "Add a unit test for parse_date and make it pass"
 ```
 src/cli.ts          command-line entry point
 src/agent.ts        the agent loop
-src/tools/          tool definitions (read, write, edit, list, search, shell, finish)
+src/tools/          tool definitions (read, write, edit, edit_lines, list, search, shell, run_check, finish)
 src/llm/            model providers (OpenAI-compatible, Anthropic)
 src/workspace.ts    path guard, redaction, truncation
 src/log.ts          JSONL session log

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../src/agent.ts";
-import { defaultTools, editFile } from "../src/tools/index.ts";
+import { defaultTools, editFile, editLines, runCheck } from "../src/tools/index.ts";
 import { resolveInWorkspace, redact } from "../src/workspace.ts";
 import type { AssistantMessage, LLM, ToolContext } from "../src/types.ts";
 
@@ -321,4 +321,61 @@ test("review is off by default and skipped when nothing changed", async () => {
   const llm = scripted([readCalc, fixDouble, runTests, call("finish", { summary: "done" })]);
   await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k) => events.push(k) });
   assert.equal(events.includes("review"), false);
+});
+
+// ---- 0018: replays of the 8 Nov v2 traces ----
+test("trace ts-emitter-once-1: a read_file after a failed edit in the same reply still runs", async () => {
+  const ws = await sandboxWithTest();
+  const results: string[] = [];
+  const badEdit = call("edit_file", { path: "calc.py", old_str: "nope", new_str: "x" });
+  const llm = scripted([readCalc, both(badEdit, readCalc), call("finish", { summary: "stop" })]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false, onEvent: (k, t) => k === "result" && results.push(t) });
+  assert.equal(results.filter((r) => r.includes("def double(x):")).length, 2); // both reads ran
+});
+
+test("an identical failed edit on unchanged contents is not run again, and the message says so", async () => {
+  const ws = await sandboxWithTest();
+  const errors: string[] = [];
+  const badEdit = call("edit_file", { path: "calc.py", old_str: "nope", new_str: "x" });
+  const llm = scripted([readCalc, badEdit, badEdit, fixDouble, badEdit, call("finish", { summary: "stop" })]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false, onEvent: (k, t) => k === "error" && errors.push(t) });
+  assert.match(errors[0] ?? "", /found 0 times/);
+  assert.match(errors[1] ?? "", /already made this exact edit_file call at step 2/);
+  assert.match(errors[2] ?? "", /found 0 times/); // the file changed in between, so it was tried again
+});
+
+test("trace py-rename-function-1: doubled braces in old_str are undone", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "views.py"), 'def greeting(user):\n    return f"Hello, {get_user_name(user)}!"\n');
+  const res = await editFile.run(
+    { path: "views.py", old_str: 'return f"Hello, {{get_user_name(user)}}!"', new_str: 'return f"Hello, {{display_name(user)}}!"' },
+    ctxFor(ws),
+  );
+  assert.match(res, /after undoing doubled braces/);
+  assert.equal(await fs.readFile(path.join(ws, "views.py"), "utf8"), 'def greeting(user):\n    return f"Hello, {display_name(user)}!"\n');
+});
+
+test("edit_lines replaces, inserts and deletes by line number", async () => {
+  const ws = await tmp();
+  const f = path.join(ws, "a.txt");
+  await fs.writeFile(f, "one\ntwo\nthree\n");
+  await editLines.run({ path: "a.txt", start: 2, end: 2, new_text: "TWO\n" }, ctxFor(ws));
+  assert.equal(await fs.readFile(f, "utf8"), "one\nTWO\nthree\n");
+  await editLines.run({ path: "a.txt", start: 1, end: 0, new_text: "zero" }, ctxFor(ws));
+  assert.equal(await fs.readFile(f, "utf8"), "zero\none\nTWO\nthree\n");
+  await editLines.run({ path: "a.txt", start: 3, end: 3, new_text: "" }, ctxFor(ws));
+  assert.equal(await fs.readFile(f, "utf8"), "zero\none\nthree\n");
+  await assert.rejects(editLines.run({ path: "a.txt", start: 9, end: 9, new_text: "x" }, ctxFor(ws)), /invalid line range/);
+});
+
+test("run_check runs Python and TypeScript snippets from the repo root and cleans up", async () => {
+  const ws = await tmp();
+  await fs.mkdir(path.join(ws, "src"));
+  await fs.writeFile(path.join(ws, "src", "m.ts"), "export const twice = (n: number): number => n * 2;\n");
+  await fs.writeFile(path.join(ws, "calc.py"), "def double(x):\n    return x * 2\n");
+  const py = await runCheck.run({ language: "python", code: "from calc import double\nprint('py', double(21))" }, ctxFor(ws));
+  const ts = await runCheck.run({ language: "node", code: 'import { twice } from "./src/m.ts";\nconst n: number = twice(21);\nconsole.log("ts", n);' }, ctxFor(ws));
+  assert.match(py, /exit code: 0\npy 42/);
+  assert.match(ts, /exit code: 0\nts 42/);
+  assert.deepEqual((await fs.readdir(ws)).sort(), ["calc.py", "src"]);
 });

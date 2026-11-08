@@ -118,6 +118,16 @@ export function findIndentShifted(text: string, oldStr: string): { found: string
   return { found: fileLines.slice(m.start, m.start + oldLines.length).join("\n"), add: m.add, remove: m.remove };
 }
 
+/**
+ * Systematic slips models make when copying code into old_str: doubled braces (a template habit,
+ * "{{x}}" for "{x}") and escaped quotes left in ("\\"" for "\""). Each is applied to old_str and
+ * new_str together and only used if the result matches the file exactly once.
+ */
+const COPY_SLIPS: Array<{ label: string; fix: (s: string) => string }> = [
+  { label: "doubled braces", fix: (s) => s.replace(/\{\{/g, "{").replace(/\}\}/g, "}") },
+  { label: "escaped quotes", fix: (s) => s.replace(/\\"/g, '"').replace(/\\'/g, "'") },
+];
+
 /** Re-indent new_str by the same shift found for old_str. */
 function shiftIndent(newStr: string, add: string, remove: string): string {
   return newStr
@@ -175,6 +185,15 @@ export const editFile: Tool = {
       throw new Error(`old_str not found in ${args.path}, but new_str is already present: the edit looks already applied. Re-read the file before editing again.`);
     }
     if (count === 0) {
+      for (const slip of COPY_SLIPS) {
+        const o = slip.fix(oldStr);
+        if (o === oldStr || text.split(o).length - 1 !== 1) continue;
+        const n = slip.fix(newStr);
+        const updated = text.replace(o, () => n);
+        await fs.writeFile(full, updated);
+        const startLine = text.slice(0, text.indexOf(o)).split("\n").length;
+        return `Edited ${args.path} (old_str matched after undoing ${slip.label}; the same fix was applied to new_str). Around the change it now reads:\n${snippet(updated, startLine, startLine + n.split("\n").length - 1)}`;
+      }
       const shifted = findIndentShifted(text, oldStr);
       if (shifted) {
         const fixedNew = shiftIndent(newStr.replace(/\n+$/, ""), shifted.add, shifted.remove);
@@ -184,7 +203,10 @@ export const editFile: Tool = {
         const endLine = startLine + fixedNew.split("\n").length - 1;
         return `Edited ${args.path} (old_str matched after adjusting its indentation to the file's). Around the change it now reads:\n${snippet(updated, startLine, endLine)}`;
       }
-      throw new Error(`old_str found 0 times in ${args.path}; it must match the file exactly.${closestLines(text, oldStr)}`);
+      throw new Error(
+        `old_str found 0 times in ${args.path}; it must match the file exactly.${closestLines(text, oldStr)}\n` +
+          "If copying the text exactly keeps failing, use edit_lines with the line numbers shown by read_file.",
+      );
     }
     if (count !== 1) throw new Error(`old_str found ${count} times in ${args.path}; it must be unique. Include more surrounding lines.`);
     const updated = text.replace(oldStr, () => newStr);
@@ -192,6 +214,69 @@ export const editFile: Tool = {
     const startLine = text.slice(0, text.indexOf(oldStr)).split("\n").length;
     const endLine = startLine + newStr.split("\n").length - 1;
     return `Edited ${args.path}. Around the change it now reads:\n${snippet(updated, startLine, endLine)}`;
+  },
+};
+
+export const editLines: Tool = {
+  name: "edit_lines",
+  description:
+    "Replace lines start..end (1-based, inclusive, as numbered by read_file) with new_text. " +
+    "Use end = start - 1 to insert before line start, and an empty new_text to delete. Returns the edited lines.",
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string" },
+      start: { type: "number" },
+      end: { type: "number" },
+      new_text: { type: "string" },
+    },
+    required: ["path", "start", "end", "new_text"],
+  },
+  async run(args, ctx) {
+    const full = resolveInWorkspace(ctx.workspace, str(args.path, "path"));
+    const text = await fs.readFile(full, "utf8");
+    const lines = text.split("\n");
+    const start = Number(args.start);
+    const end = Number(args.end);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || start > lines.length + 1 || end < start - 1 || end > lines.length) {
+      throw new Error(`invalid line range ${args.start}-${args.end}; ${args.path} has ${lines.length} lines`);
+    }
+    const newText = str(args.new_text, "new_text").replace(/\n$/, "");
+    const inserted = newText === "" ? [] : newText.split("\n");
+    lines.splice(start - 1, end - start + 1, ...inserted);
+    const updated = lines.join("\n");
+    await fs.writeFile(full, updated);
+    const last = Math.max(start, start + inserted.length - 1);
+    return `Edited ${args.path}: lines ${start}-${end} replaced by ${inserted.length} line(s). Around the change it now reads:\n${snippet(updated, start, last)}`;
+  },
+};
+
+export const runCheck: Tool = {
+  name: "run_check",
+  description:
+    "Run a short Python or Node/TypeScript script from the repository root to check a behaviour, without shell quoting. " +
+    'language: "python" or "node". In node code, import project files with relative paths such as "./src/file.ts".',
+  parameters: {
+    type: "object",
+    properties: { language: { type: "string" }, code: { type: "string" } },
+    required: ["language", "code"],
+  },
+  async run(args, ctx) {
+    const language = str(args.language, "language").toLowerCase();
+    const node = ["node", "typescript", "ts", "javascript", "js"].includes(language);
+    if (!node && language !== "python") throw new Error('language must be "python" or "node"');
+    const file = node ? ".swe_check.mts" : ".swe_check.py";
+    const full = resolveInWorkspace(ctx.workspace, file);
+    if (!(await ctx.confirm(`Run check script (${language}):\n${truncate(str(args.code, "code"), 600)}`))) return "User declined to run this check.";
+    await fs.writeFile(full, str(args.code, "code"));
+    try {
+      const { code, output } = node
+        ? await runCommand("node", ["--disable-warning=ExperimentalWarning", file], ctx.workspace)
+        : await runCommand("python3", [file], ctx.workspace);
+      return truncate(`exit code: ${code}\n${output}`);
+    } finally {
+      await fs.rm(full, { force: true });
+    }
   },
 };
 
@@ -256,4 +341,4 @@ export const finish: Tool = {
   },
 };
 
-export const defaultTools: Tool[] = [readFile, writeFile, editFile, listDir, search, runShell, finish];
+export const defaultTools: Tool[] = [readFile, writeFile, editFile, editLines, listDir, search, runShell, runCheck, finish];

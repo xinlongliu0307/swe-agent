@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import type { LLM, Message, Tool, ToolContext } from "./types.ts";
 import { truncate } from "./workspace.ts";
@@ -7,7 +8,8 @@ import type { SessionLog } from "./log.ts";
 
 export const SYSTEM_PROMPT = `You are a careful software engineering agent working inside a code repository.
 Work in small steps: inspect files before editing, make minimal changes, then verify by running tests.
-Use edit_file for targeted changes and write_file only for new files.
+Use edit_file for targeted changes and write_file only for new files. If edit_file cannot match old_str,
+use edit_lines with the line numbers shown by read_file. Use run_check to try out code without shell quoting.
 All paths are relative to the repository root. When the task is done, call finish with a short summary.
 Never write tool results yourself: after making tool calls, stop and wait for the real results.`;
 
@@ -56,6 +58,17 @@ export async function runAgent(opts: {
 }): Promise<RunResult> {
   const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true, testCommand, review = false } = opts;
   let reviewed = false;
+  // edit calls that failed, keyed by call + file contents: repeating one cannot succeed.
+  const failedEdits = new Map<string, { step: number; error: string }>();
+  const fileHash = (p: unknown) => {
+    try {
+      return crypto.createHash("sha1").update(fs.readFileSync(path.resolve(ctx.workspace, String(p)))).digest("hex");
+    } catch {
+      return "missing";
+    }
+  };
+  const READ_ONLY = new Set(["read_file", "list_dir", "search"]);
+  const EDITS = new Set(["edit_file", "write_file", "edit_lines"]);
   // Files whose current contents the model has seen in an earlier step (read, written or edited).
   const known = new Set<string>();
   const norm = (p: unknown) => (typeof p === "string" ? path.normalize(p) : "");
@@ -133,7 +146,8 @@ export async function runAgent(opts: {
     for (const call of reply.toolCalls) {
       // Calls after a failure were planned assuming it succeeded (e.g. run tests after an edit
       // that did not apply), so they are not run.
-      if (failedCall) {
+      // Read-only calls still run: after a failed edit, re-reading the file is exactly what helps.
+      if (failedCall && !READ_ONLY.has(call.name)) {
         const msg = `Not run: an earlier call in this reply (${failedCall}) failed. Read its error, then decide the next step.`;
         messages.push({ role: "tool", content: msg, toolCallId: call.id, name: call.name });
         log?.write("skipped", { name: call.name, args: call.arguments, after: failedCall });
@@ -183,18 +197,32 @@ export async function runAgent(opts: {
         if (!tool) throw new Error(`Unknown tool: ${call.name}`);
         const args = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
         onEvent("tool", `${call.name} ${truncate(call.arguments, 200)}`);
-        if (readBeforeEdit && (call.name === "edit_file" || call.name === "write_file") && !known.has(norm(args.path))) {
+        if (readBeforeEdit && EDITS.has(call.name) && !known.has(norm(args.path))) {
           const exists = typeof args.path === "string" && fs.existsSync(path.resolve(ctx.workspace, args.path));
           if (exists)
             throw new Error(
               `${call.name} refused: read ${args.path} with read_file first, in a separate step, so the change is based on its actual contents.`,
             );
         }
-        result = await tool.run(args, ctx);
+        const editKey = call.name === "edit_file" ? `${key}\u0000${fileHash(args.path)}` : "";
+        const before = editKey ? failedEdits.get(editKey) : undefined;
+        if (before) {
+          throw new Error(
+            `you already made this exact edit_file call at step ${before.step} on the same file contents, and it failed: ` +
+              `${truncate(before.error, 200)} Repeating it will fail again. Re-read the file and copy old_str exactly, ` +
+              "or use edit_lines with the line numbers shown by read_file.",
+          );
+        }
+        try {
+          result = await tool.run(args, ctx);
+        } catch (err) {
+          if (editKey) failedEdits.set(editKey, { step, error: (err as Error).message });
+          throw err;
+        }
       } catch (err) {
         result = `ERROR: ${(err as Error).message}`;
       }
-      const isEdit = call.name === "write_file" || call.name === "edit_file";
+      const isEdit = EDITS.has(call.name);
       if (result.startsWith("ERROR:")) {
         onEvent("error", truncate(result, 300));
         if (isEdit) lastEditError = result.slice(7);
@@ -240,6 +268,9 @@ export function reviewMessage(task: string, files: string[], workspace: string, 
   const example = ts
     ? `node --input-type=module -e 'import { f } from "./src/file.ts"; console.log(f(1, 2))'`
     : `python3 -c "from package.module import f; print(f(1, 2))"`;
+  const tool = ts
+    ? `run_check with language "node" and code such as: import { f } from "./src/file.ts"; console.log(f(1, 2));`
+    : `run_check with language "python" and code such as: from package.module import f; print(f(1, 2))`;
   let budget = maxChars;
   const shown: string[] = [];
   for (const f of files) {
@@ -260,7 +291,7 @@ export function reviewMessage(task: string, files: string[], workspace: string, 
     "The tests pass, but tests often check only part of what was asked. Before finishing:",
     "1. Re-read the task and the doc comments or docstrings in the files you changed (shown below).",
     "2. List every requirement they state, one per line, including edge cases (empty input, errors to raise, rounding, formatting, every caller that must change).",
-    `3. For each requirement the tests do not check, run a quick check, for example: ${example}`,
+    `3. For each requirement the tests do not check, try it out with ${tool} (no shell quoting needed; ${example} also works in run_shell).`,
     "Fix anything that fails, run the tests again, then call finish.",
     "",
     `Task: ${task}`,
