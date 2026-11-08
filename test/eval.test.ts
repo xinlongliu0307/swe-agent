@@ -115,3 +115,20 @@ test("trace feature-median: a test that cannot see median is caught by the agent
   assert.equal(r.solved, true, r.checkOutput);
   assert.equal(r.guardRefusals, 1);
 });
+
+// ---- suite v2: every task is valid and solvable ----
+test("every v2 task fails before the agent runs and passes with its reference solution", async () => {
+  const { SUITES } = await import("../evals/run.ts");
+  const dir = SUITES.v2!;
+  const names = await fs.readdir(dir);
+  assert.equal(names.length, 10);
+  for (const name of names) {
+    const taskDir = path.join(dir, name);
+    const work = await prepareWorkdir(taskDir);
+    assert.equal((await runCheck(taskDir, work)).ok, false, `${name}: check passes before any change`);
+    await fs.cp(path.join(taskDir, "solution"), work, { recursive: true });
+    const after = await runCheck(taskDir, work);
+    await fs.rm(work, { recursive: true, force: true });
+    assert.equal(after.ok, true, `${name}: reference solution fails: ${after.output}`);
+  }
+});

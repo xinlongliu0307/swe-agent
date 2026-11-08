@@ -30,6 +30,10 @@ test/               node:test suites with a scripted fake model
 ```bash
 npm run eval                                        # all tasks once
 npm run eval -- --tasks fix-mean,feature-median --repeat 3
+npm run eval -- --suite v2 --repeat 3               # multi-file Python and TypeScript tasks
+npm run trace -- runs/eval-<stamp>/<task>-<repeat>  # step-by-step view of one run
 ```
+
+Suites: `v1` (default, `evals/tasks/`) holds ten small single-file Python tasks; `v2` (`evals/tasks-v2/`) holds five multi-file Python and five multi-file TypeScript tasks (bug fixes, a cross-file rename, features). TypeScript tasks run on Node's built-in type stripping and `node --test`, so no packages are installed. Each v2 task also has a `solution/` folder that the test suite uses to prove the task is solvable; the agent never sees it.
 
 Each task in `evals/tasks/<name>/` has a small `repo/`, an instruction in `task.md`, and a `check.sh` that exits 0 only when the task is truly solved. Fix tasks also fail if the agent edits the tests. The harness runs every task in a throwaway copy with shell commands auto-approved, judges it only by `check.sh` (never by the model's summary), and writes a JSON report to `runs/`. Keep a change only if the pass rate rises, or stays level with fewer steps and errors.

@@ -4,6 +4,7 @@
 //   npm run eval                          all tasks once
 //   npm run eval -- --tasks fix-mean,fix-temperature --repeat 3
 //   npm run eval -- --max-steps 15 --keep  (keep work dirs for inspection)
+//   npm run eval -- --suite v2 --repeat 3  (multi-file Python and TypeScript tasks)
 //
 // Sampling is fixed by default so that two versions of the agent face the same
 // randomness: temperature 0.3 and seed = base seed + repeat number. Use
@@ -22,6 +23,12 @@ import { makeLLM } from "../src/llm/index.ts";
 import type { LLM } from "../src/types.ts";
 
 export const TASKS_DIR = path.join(import.meta.dirname, "tasks");
+
+/** v1: ten small single-file Python tasks. v2: ten multi-file Python and TypeScript tasks. */
+export const SUITES: Record<string, string> = {
+  v1: TASKS_DIR,
+  v2: path.join(import.meta.dirname, "tasks-v2"),
+};
 
 /** The visible test suite of every task; a task folder may override it with a test_cmd file. */
 export const DEFAULT_TEST_COMMAND = "python3 -m unittest -q";
@@ -189,9 +196,12 @@ async function main() {
       seed: { type: "string", default: "1000" },
       "test-cmd": { type: "string", default: DEFAULT_TEST_COMMAND },
       "no-agent-tests": { type: "boolean", default: false },
+      suite: { type: "string", default: "v1" },
     },
   });
-  const all = (await fsp.readdir(TASKS_DIR)).sort();
+  const suiteDir = SUITES[values.suite!];
+  if (!suiteDir) throw new Error(`Unknown suite: ${values.suite} (choose ${Object.keys(SUITES).join(", ")})`);
+  const all = (await fsp.readdir(suiteDir)).sort();
   const names = values.tasks ? values.tasks.split(",").map((s) => s.trim()) : all;
   const unknown = names.filter((n) => !all.includes(n));
   if (unknown.length) throw new Error(`Unknown task(s): ${unknown.join(", ")}`);
@@ -209,6 +219,7 @@ async function main() {
     );
   const llm = llmFor(1);
   const repeat = Number(values.repeat);
+  console.log(`Suite: ${values.suite} (${names.length} tasks)`);
   console.log(fixed ? `Sampling: temperature ${sampling!.temperature}, seeds ${sampling!.baseSeed + 1}..${sampling!.baseSeed + repeat}` : "Sampling: provider defaults (not reproducible)");
   const records: EvalRecord[] = [];
 
@@ -225,7 +236,7 @@ async function main() {
   outer: for (const name of names) {
     for (let rep = 1; rep <= repeat; rep++) {
       process.stdout.write(`${name} #${rep} ... `);
-      const taskDir = path.join(TASKS_DIR, name);
+      const taskDir = path.join(suiteDir, name);
       const r = await runTask(taskDir, llmFor(rep), {
         testCommand: values["no-agent-tests"] ? undefined : taskTestCommand(taskDir, values["test-cmd"]!),
         rep,
@@ -258,7 +269,7 @@ async function main() {
   await fsp.mkdir(path.dirname(report), { recursive: true });
   await fsp.writeFile(
     report,
-    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, repeat, sampling, agentTests: !values["no-agent-tests"], aborted, summary, records }, null, 2),
+    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, suite: values.suite, repeat, sampling, agentTests: !values["no-agent-tests"], aborted, summary, records }, null, 2),
   );
   console.log(`report: ${path.relative(process.cwd(), report)}`);
 }
