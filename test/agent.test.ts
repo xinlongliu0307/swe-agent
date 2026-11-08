@@ -267,3 +267,58 @@ test("with a test command, finish is checked by running the real tests", async (
   assert.match(guard[0] ?? "", /AssertionError: 8 != 4/); // the real failure output is shown
   assert.equal(res.verified, true);
 });
+
+// ---- 0017: indentation-tolerant edits and the requirements review ----
+test("edit_file applies an old_str whose indentation differs uniformly, re-indenting new_str", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "q.ts"), "export function f(qs: string) {\n  for (const p of qs.split(\"&\")) {\n    const [k, v] = p.split(\"=\");\n    out[k] = v;\n  }\n}\n");
+  const res = await editFile.run(
+    { path: "q.ts", old_str: "const [k, v] = p.split(\"=\");\nout[k] = v;", new_str: "const i = p.indexOf(\"=\");\nif (i >= 0) {\n  out[p.slice(0, i)] = p.slice(i + 1);\n}" },
+    ctxFor(ws),
+  );
+  assert.match(res, /matched after adjusting its indentation/);
+  assert.equal(
+    await fs.readFile(path.join(ws, "q.ts"), "utf8"),
+    "export function f(qs: string) {\n  for (const p of qs.split(\"&\")) {\n    const i = p.indexOf(\"=\");\n    if (i >= 0) {\n      out[p.slice(0, i)] = p.slice(i + 1);\n    }\n  }\n}\n",
+  );
+});
+
+test("when old_str does not match at all, the error shows the closest lines to copy", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "c.ts"), "export async function getText(url: string) {\n  const res = await fetcher(url);\n  return res.body;\n}\n");
+  await assert.rejects(
+    editFile.run({ path: "c.ts", old_str: "const response = await fetcher(url, opts);", new_str: "x" }, ctxFor(ws)),
+    /closest lines in the file[\s\S]*2 {4}const res = await fetcher\(url\);/,
+  );
+});
+
+test("review: the first passing finish is turned into a requirements check, the second is accepted", async () => {
+  const ws = await sandboxWithTest();
+  const events: string[] = [];
+  let reviewText = "";
+  const replies = [readCalc, fixDouble, call("finish", { summary: "done" }), call("finish", { summary: "done" })];
+  let i = 0;
+  const llm: LLM = {
+    chat: async (messages) => {
+      const last = messages.at(-1);
+      if (last?.role === "tool" && last.content.startsWith("NOT FINISHED YET")) reviewText = last.content;
+      return replies[i++] ?? call("finish", { summary: "x" });
+    },
+  };
+  const res = await runAgent({ task: "Fix double", llm, tools: defaultTools, ctx: ctxFor(ws), testCommand: "python3 -m unittest -q", review: true, onEvent: (k) => events.push(k) });
+  assert.equal(events.filter((k) => k === "review").length, 1);
+  assert.match(reviewText, /List every requirement/);
+  assert.match(reviewText, /Task: Fix double/);
+  assert.match(reviewText, /--- calc.py ---\n {3}1 {2}def double\(x\):/);
+  assert.equal(res.done, true);
+  assert.equal(res.verified, true);
+  assert.equal(res.steps, 4);
+});
+
+test("review is off by default and skipped when nothing changed", async () => {
+  const ws = await sandboxWithTest();
+  const events: string[] = [];
+  const llm = scripted([readCalc, fixDouble, runTests, call("finish", { summary: "done" })]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), onEvent: (k) => events.push(k) });
+  assert.equal(events.includes("review"), false);
+});

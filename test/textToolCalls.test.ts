@@ -102,3 +102,16 @@ test("the client passes parse failures on to the agent", async () => {
   assert.equal(reply.toolCalls?.length, 0);
   assert.equal(reply.parseErrors?.length, 1);
 });
+
+test("trace ts-query-parse-1: a regex like /\\+/g inside a JSON string is repaired, not rejected", () => {
+  const text = String.raw`{"name": "edit_file", "arguments": {"path": "src/query.ts", "old_str": "x", "new_str": "s.replace(/\+/g, \" \")"}}`;
+  const r = parseTextToolCalls(text, names);
+  assert.equal(r.failures.length, 0);
+  assert.equal(JSON.parse(r.calls[0]!.arguments).new_str, 's.replace(/\\+/g, " ")');
+});
+
+test("valid JSON escapes are left alone by the repair", () => {
+  const text = String.raw`{"name": "write_file", "arguments": {"path": "a.txt", "content": "tab\there é quote\" slash\\ end"}}`;
+  const r = parseTextToolCalls(text, names);
+  assert.equal(JSON.parse(r.calls[0]!.arguments).content, 'tab\there é quote" slash\\ end');
+});

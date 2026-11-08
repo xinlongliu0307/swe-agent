@@ -80,7 +80,7 @@ export async function runCheck(taskDir: string, work: string): Promise<{ ok: boo
 export async function runTask(
   taskDir: string,
   llm: LLM,
-  opts: { rep?: number; maxSteps?: number; logDir?: string; keep?: boolean; testCommand?: string } = {},
+  opts: { rep?: number; maxSteps?: number; logDir?: string; keep?: boolean; testCommand?: string; review?: boolean } = {},
 ): Promise<EvalRecord> {
   const task = path.basename(taskDir);
   const rep = opts.rep ?? 1;
@@ -105,6 +105,7 @@ export async function runTask(
         maxSteps: opts.maxSteps ?? 20,
         log,
         testCommand: opts.testCommand,
+        review: opts.review ?? false,
         onEvent: (kind) => {
           if (kind === "error") toolErrors++;
           if (kind === "guard") guardRefusals++;
@@ -197,6 +198,7 @@ async function main() {
       "test-cmd": { type: "string", default: DEFAULT_TEST_COMMAND },
       "no-agent-tests": { type: "boolean", default: false },
       suite: { type: "string", default: "v1" },
+      "no-review": { type: "boolean", default: false },
     },
   });
   const suiteDir = SUITES[values.suite!];
@@ -219,7 +221,7 @@ async function main() {
     );
   const llm = llmFor(1);
   const repeat = Number(values.repeat);
-  console.log(`Suite: ${values.suite} (${names.length} tasks)`);
+  console.log(`Suite: ${values.suite} (${names.length} tasks), requirements review: ${values["no-review"] ? "off" : "on"}`);
   console.log(fixed ? `Sampling: temperature ${sampling!.temperature}, seeds ${sampling!.baseSeed + 1}..${sampling!.baseSeed + repeat}` : "Sampling: provider defaults (not reproducible)");
   const records: EvalRecord[] = [];
 
@@ -239,6 +241,7 @@ async function main() {
       const taskDir = path.join(suiteDir, name);
       const r = await runTask(taskDir, llmFor(rep), {
         testCommand: values["no-agent-tests"] ? undefined : taskTestCommand(taskDir, values["test-cmd"]!),
+        review: !values["no-review"],
         rep,
         maxSteps: Number(values["max-steps"]),
         logDir,
@@ -269,7 +272,7 @@ async function main() {
   await fsp.mkdir(path.dirname(report), { recursive: true });
   await fsp.writeFile(
     report,
-    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, suite: values.suite, repeat, sampling, agentTests: !values["no-agent-tests"], aborted, summary, records }, null, 2),
+    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, suite: values.suite, review: !values["no-review"], repeat, sampling, agentTests: !values["no-agent-tests"], aborted, summary, records }, null, 2),
   );
   console.log(`report: ${path.relative(process.cwd(), report)}`);
 }

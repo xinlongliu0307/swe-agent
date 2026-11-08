@@ -80,6 +80,68 @@ export function snippet(text: string, startLine: number, endLine: number, contex
   return out.join("\n");
 }
 
+/**
+ * Find old_str in text ignoring a uniform indentation difference (e.g. the model used 1 space
+ * where the file uses 4). Returns the exact text found and the indentation shift, or null.
+ * Only accepts a single match whose lines differ by the same indentation offset throughout.
+ */
+export function findIndentShifted(text: string, oldStr: string): { found: string; add: string; remove: string } | null {
+  const fileLines = text.split("\n");
+  const oldLines = oldStr.replace(/\n+$/, "").split("\n");
+  const firstReal = oldLines.findIndex((l) => l.trim() !== "");
+  if (firstReal < 0) return null;
+  const lead = (l: string) => /^[ \t]*/.exec(l)![0];
+  const matches: Array<{ start: number; add: string; remove: string }> = [];
+  for (let s = 0; s + oldLines.length <= fileLines.length; s++) {
+    let ok = true;
+    let add = "";
+    let remove = "";
+    for (let j = 0; j < oldLines.length && ok; j++) {
+      const f = fileLines[s + j]!;
+      const o = oldLines[j]!;
+      if (f.trim() !== o.trim()) ok = false;
+      else if (o.trim() !== "") {
+        const fl = lead(f);
+        const ol = lead(o);
+        const a = fl.length >= ol.length && fl.endsWith(ol) ? fl.slice(0, fl.length - ol.length) : null;
+        const r = ol.length > fl.length && ol.endsWith(fl) ? ol.slice(0, ol.length - fl.length) : null;
+        const [thisAdd, thisRemove] = a !== null ? [a, ""] : r !== null ? ["", r] : [null, null];
+        if (thisAdd === null || thisRemove === null) ok = false;
+        else if (j === firstReal) [add, remove] = [thisAdd, thisRemove];
+        else if (thisAdd !== add || thisRemove !== remove) ok = false; // not a uniform shift
+      }
+    }
+    if (ok) matches.push({ start: s, add, remove });
+  }
+  if (matches.length !== 1) return null;
+  const m = matches[0]!;
+  return { found: fileLines.slice(m.start, m.start + oldLines.length).join("\n"), add: m.add, remove: m.remove };
+}
+
+/** Re-indent new_str by the same shift found for old_str. */
+function shiftIndent(newStr: string, add: string, remove: string): string {
+  return newStr
+    .split("\n")
+    .map((l) => (l.trim() === "" ? l : add + (remove && l.startsWith(remove) ? l.slice(remove.length) : l)))
+    .join("\n");
+}
+
+/** The file lines most like old_str's first line, to show when nothing matched. */
+function closestLines(text: string, oldStr: string): string {
+  const first = oldStr.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  const lines = text.split("\n");
+  const words = first.split(/\W+/).filter((w) => w.length > 2);
+  let best = -1;
+  let bestScore = 0;
+  lines.forEach((l, i) => {
+    const score = words.filter((w) => l.includes(w)).length;
+    if (score > bestScore) [best, bestScore] = [i, score];
+  });
+  if (best < 0) return "";
+  const n = Math.max(1, oldStr.split("\n").length);
+  return `\nThe closest lines in the file are (copy old_str from here exactly, including indentation):\n${snippet(text, best + 1, best + n, 1, 12)}`;
+}
+
 export const editFile: Tool = {
   name: "edit_file",
   description:
@@ -112,7 +174,19 @@ export const editFile: Tool = {
     if (count === 0 && newStr.trim().length >= 10 && text.includes(newStr)) {
       throw new Error(`old_str not found in ${args.path}, but new_str is already present: the edit looks already applied. Re-read the file before editing again.`);
     }
-    if (count !== 1) throw new Error(`old_str found ${count} times in ${args.path}; it must be unique`);
+    if (count === 0) {
+      const shifted = findIndentShifted(text, oldStr);
+      if (shifted) {
+        const fixedNew = shiftIndent(newStr.replace(/\n+$/, ""), shifted.add, shifted.remove);
+        const updated = text.replace(shifted.found, () => fixedNew);
+        await fs.writeFile(full, updated);
+        const startLine = text.slice(0, text.indexOf(shifted.found)).split("\n").length;
+        const endLine = startLine + fixedNew.split("\n").length - 1;
+        return `Edited ${args.path} (old_str matched after adjusting its indentation to the file's). Around the change it now reads:\n${snippet(updated, startLine, endLine)}`;
+      }
+      throw new Error(`old_str found 0 times in ${args.path}; it must match the file exactly.${closestLines(text, oldStr)}`);
+    }
+    if (count !== 1) throw new Error(`old_str found ${count} times in ${args.path}; it must be unique. Include more surrounding lines.`);
     const updated = text.replace(oldStr, () => newStr);
     await fs.writeFile(full, updated);
     const startLine = text.slice(0, text.indexOf(oldStr)).split("\n").length;

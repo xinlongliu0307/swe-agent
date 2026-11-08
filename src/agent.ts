@@ -48,8 +48,14 @@ export async function runAgent(opts: {
    * finish, so verification never depends on which command the model chose to run.
    */
   testCommand?: string;
+  /**
+   * Once per run, when the tests pass, ask the model to check its work against every written
+   * requirement (task text and doc comments) before finish is accepted (default false).
+   */
+  review?: boolean;
 }): Promise<RunResult> {
-  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true, testCommand } = opts;
+  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true, testCommand, review = false } = opts;
+  let reviewed = false;
   // Files whose current contents the model has seen in an earlier step (read, written or edited).
   const known = new Set<string>();
   const norm = (p: unknown) => (typeof p === "string" ? path.normalize(p) : "");
@@ -156,6 +162,14 @@ export async function runAgent(opts: {
             why = `The project's tests (${testCommand}) fail when the agent runs them (exit code ${lastTestExit}):\n${tail}`;
           }
         }
+        if (!why && review && !reviewed && changed.size > 0) {
+          reviewed = true;
+          const msg = reviewMessage(task, [...changed], ctx.workspace);
+          onEvent("review", "requirements review requested before finish");
+          log?.write("review", { files: [...changed] });
+          messages.push({ role: "tool", content: msg, toolCallId: call.id, name: call.name });
+          continue;
+        }
         if (why && refusals < MAX_REFUSALS) {
           refusals++;
           const msg = `FINISH REFUSED: ${why}`;
@@ -218,6 +232,41 @@ export async function runAgent(opts: {
   }
   log?.write("stopped", { reason: "max steps" });
   return { done: false, summary: `Stopped after ${maxSteps} steps without finish.`, steps: maxSteps, changed: [...changed], verified: false };
+}
+
+/** The one-time "check every requirement" request, with the changed files so the doc comments are in view. */
+export function reviewMessage(task: string, files: string[], workspace: string, maxChars = 8000): string {
+  const ts = files.some((f) => /\.[cm]?tsx?$/.test(f));
+  const example = ts
+    ? `node --input-type=module -e 'import { f } from "./src/file.ts"; console.log(f(1, 2))'`
+    : `python3 -c "from package.module import f; print(f(1, 2))"`;
+  let budget = maxChars;
+  const shown: string[] = [];
+  for (const f of files) {
+    let text = "";
+    try {
+      text = fs.readFileSync(path.resolve(workspace, f), "utf8");
+    } catch {
+      continue;
+    }
+    const numbered = text.split("\n").map((l, i) => `${String(i + 1).padStart(4)}  ${l}`).join("\n");
+    const part = numbered.length > budget ? numbered.slice(0, Math.max(0, budget)) + "\n... [truncated]" : numbered;
+    budget -= part.length;
+    shown.push(`--- ${f} ---\n${part}`);
+    if (budget <= 0) break;
+  }
+  return [
+    "NOT FINISHED YET: requirements review (this happens once).",
+    "The tests pass, but tests often check only part of what was asked. Before finishing:",
+    "1. Re-read the task and the doc comments or docstrings in the files you changed (shown below).",
+    "2. List every requirement they state, one per line, including edge cases (empty input, errors to raise, rounding, formatting, every caller that must change).",
+    `3. For each requirement the tests do not check, run a quick check, for example: ${example}`,
+    "Fix anything that fails, run the tests again, then call finish.",
+    "",
+    `Task: ${task}`,
+    "",
+    ...shown,
+  ].join("\n");
 }
 
 export function unparsedCallMessage(detail: string): string {

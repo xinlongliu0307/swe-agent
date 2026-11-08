@@ -72,15 +72,29 @@ function jsonError(raw: string): string {
   }
 }
 
-/** Inside JSON strings, turn literal newlines, carriage returns and tabs into \n, \r, \t. */
+/**
+ * Repairs inside JSON strings, both unambiguous:
+ * - literal newlines, carriage returns and tabs become \n, \r, \t;
+ * - a backslash that does not start a valid JSON escape (e.g. the "\+" of a regex
+ *   like /\+/g written into code) is kept as a literal backslash.
+ */
 export function escapeControlCharsInStrings(raw: string): string {
   let out = "";
   let inString = false;
   let escaped = false;
-  for (const c of raw) {
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
     if (inString) {
       if (escaped) escaped = false;
-      else if (c === "\\") escaped = true;
+      else if (c === "\\") {
+        const next = raw[i + 1] ?? "";
+        const validU = next === "u" && /^[0-9a-fA-F]{4}$/.test(raw.slice(i + 2, i + 6));
+        if (!'"\\/bfnrt'.includes(next) && !validU) {
+          out += "\\\\"; // literal backslash
+          continue;
+        }
+        escaped = true;
+      }
       else if (c === '"') inString = false;
       else if (c === "\n") { out += "\\n"; continue; }
       else if (c === "\r") { out += "\\r"; continue; }

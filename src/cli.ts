@@ -20,6 +20,7 @@ const { values, positionals } = parseArgs({
     "max-steps": { type: "string" },
     yes: { type: "boolean", short: "y", default: false },
     test: { type: "string", short: "t" },
+    "no-review": { type: "boolean", default: false },
   },
 });
 
@@ -45,12 +46,14 @@ try {
     maxSteps: Number(values["max-steps"] ?? process.env.SWE_MAX_STEPS ?? 30),
     log,
     testCommand: values.test ?? (process.env.SWE_TEST_CMD || undefined),
+    review: !values["no-review"],
     onEvent: (kind, text) =>
       console.log(
         kind === "tool" ? `  > ${text}`
         : kind === "error" ? `  ! ${text}`
         : kind === "result" ? `    = ${text}`
         : kind === "guard" ? `  ? ${text}`
+        : kind === "review" ? `  ? REVIEW: ${text}`
         : `\n${text}`,
       ),
   });
