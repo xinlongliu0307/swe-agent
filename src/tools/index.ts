@@ -214,7 +214,7 @@ export const editFile: Tool = {
       }
       throw new Error(
         `old_str found 0 times in ${args.path}; it must match the file exactly.${closestLines(text, oldStr)}\n` +
-          "If copying the text exactly keeps failing, use edit_lines with the line numbers shown by read_file.",
+          "Copy old_str from the numbered lines above, without the line numbers, keeping the indentation exactly.",
       );
     }
     if (count !== 1) throw new Error(`old_str found ${count} times in ${args.path}; it must be unique. Include more surrounding lines.`);
@@ -350,4 +350,6 @@ export const finish: Tool = {
   },
 };
 
-export const defaultTools: Tool[] = [readFile, writeFile, editFile, editLines, listDir, search, runShell, runCheck, finish];
+// edit_lines is kept out of the default set: with qwen2.5-coder it replaced edit_file in Python
+// tasks and broke indentation (suite v2: Python 5/15 -> 1/15). It stays available to add back.
+export const defaultTools: Tool[] = [readFile, writeFile, editFile, listDir, search, runShell, runCheck, finish];

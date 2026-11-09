@@ -398,3 +398,58 @@ test("stripAnsi removes colour codes and keeps the text", async () => {
   const { stripAnsi } = await import("../src/tools/index.ts");
   assert.equal(stripAnsi("ts \x1B[33m42\x1B[39m \x1B[1;31mFAIL\x1B[0m"), "ts 42 FAIL");
 });
+
+// ---- 0020: replays of the 9 Nov v2 traces ----
+test("trace py-config-env-1: an edit that breaks Python indentation is rejected and the file restored", async () => {
+  const ws = await sandboxWithTest();
+  const badIndent = call("edit_file", { path: "calc.py", old_str: "    return x * 3", new_str: "  if x:\n return x * 2" });
+  const replies = [readCalc, badIndent, call("finish", { summary: "stop" })];
+  let i = 0;
+  let toModel = "";
+  const llm: LLM = {
+    chat: async (messages) => {
+      const last = messages.at(-1);
+      if (i === 2 && last?.role === "tool") toModel = last.content;
+      return replies[i++]!;
+    },
+  };
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false });
+  assert.match(toModel, /would make calc.py invalid Python, so the file was left unchanged/);
+  assert.match(toModel, /IndentationError/);
+  assert.equal(await fs.readFile(path.join(ws, "calc.py"), "utf8"), "def double(x):\n    return x * 3\n");
+});
+
+test("an already-broken Python file can still be edited (the check only blocks new breakage)", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "b.py"), "def f():\nreturn 1\n");
+  const llm = scripted([call("read_file", { path: "b.py" }), call("edit_file", { path: "b.py", old_str: "def f():", new_str: "def g():" }), call("finish", { summary: "x" })]);
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false });
+  assert.deepEqual(res.changed, ["b.py"]);
+});
+
+test("trace py-config-env-1: an edit that changes nothing is reported, not silently 'applied'", async () => {
+  const ws = await sandboxWithTest();
+  const errors: string[] = [];
+  const same = call("write_file", { path: "calc.py", content: "def double(x):\n    return x * 3\n" });
+  const llm = scripted([readCalc, same, call("finish", { summary: "x" })]);
+  await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false, onEvent: (k, t) => k === "error" && errors.push(t) });
+  assert.match(errors[0] ?? "", /changed nothing/);
+});
+
+test("trace py-todo-cli-2: protected test files cannot be edited", async () => {
+  const ws = await sandboxWithTest();
+  const errors: string[] = [];
+  const llm = scripted([
+    call("read_file", { path: "test_calc.py" }),
+    call("edit_file", { path: "test_calc.py", old_str: "import unittest", new_str: "import unittest, sys" }),
+    call("finish", { summary: "x" }),
+  ]);
+  const res = await runAgent({ task: "t", llm, tools: defaultTools, ctx: ctxFor(ws), finishGuard: false, protectedPaths: [/(^|\/)test_[^/]*\.py$/], onEvent: (k, t) => k === "error" && errors.push(t) });
+  assert.match(errors[0] ?? "", /test_calc.py is protected/);
+  assert.deepEqual(res.changed, []);
+});
+
+test("edit_lines is not offered by default any more", () => {
+  assert.equal(defaultTools.some((t) => t.name === "edit_lines"), false);
+  assert.equal(defaultTools.some((t) => t.name === "run_check"), true);
+});

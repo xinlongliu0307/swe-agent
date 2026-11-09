@@ -21,6 +21,7 @@ const { values, positionals } = parseArgs({
     yes: { type: "boolean", short: "y", default: false },
     test: { type: "string", short: "t" },
     "no-review": { type: "boolean", default: false },
+    protect: { type: "string", multiple: true },
   },
 });
 
@@ -47,6 +48,7 @@ try {
     log,
     testCommand: values.test ?? (process.env.SWE_TEST_CMD || undefined),
     review: !values["no-review"],
+    protectedPaths: (values.protect ?? []).map((p) => new RegExp(p)),
     onEvent: (kind, text) =>
       console.log(
         kind === "tool" ? `  > ${text}`

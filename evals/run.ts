@@ -33,6 +33,13 @@ export const SUITES: Record<string, string> = {
 /** The visible test suite of every task; a task folder may override it with a test_cmd file. */
 export const DEFAULT_TEST_COMMAND = "python3 -m unittest -q";
 
+/** When a task says not to edit the tests, the agent is told which paths those are. */
+export function testPathsIfProtected(instruction: string): RegExp[] {
+  return /do not (edit|change|modify) the tests/i.test(instruction)
+    ? [/(^|\/)tests?\//, /(^|\/)test_[^/]*\.py$/, /\.test\.[cm]?[jt]s$/]
+    : [];
+}
+
 export function taskTestCommand(taskDir: string, fallback: string): string {
   try {
     return fs.readFileSync(path.join(taskDir, "test_cmd"), "utf8").trim() || fallback;
@@ -106,6 +113,7 @@ export async function runTask(
         log,
         testCommand: opts.testCommand,
         review: opts.review ?? false,
+        protectedPaths: testPathsIfProtected(instruction),
         onEvent: (kind) => {
           if (kind === "error") toolErrors++;
           if (kind === "guard") guardRefusals++;

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import type { LLM, Message, Tool, ToolContext } from "./types.ts";
 import { truncate } from "./workspace.ts";
@@ -8,8 +9,7 @@ import type { SessionLog } from "./log.ts";
 
 export const SYSTEM_PROMPT = `You are a careful software engineering agent working inside a code repository.
 Work in small steps: inspect files before editing, make minimal changes, then verify by running tests.
-Use edit_file for targeted changes and write_file only for new files. If edit_file cannot match old_str,
-use edit_lines with the line numbers shown by read_file. Use run_check to try out code without shell quoting.
+Use edit_file for targeted changes and write_file only for new files. Use run_check to try out code without shell quoting.
 All paths are relative to the repository root. When the task is done, call finish with a short summary.
 Never write tool results yourself: after making tool calls, stop and wait for the real results.`;
 
@@ -50,13 +50,15 @@ export async function runAgent(opts: {
    * finish, so verification never depends on which command the model chose to run.
    */
   testCommand?: string;
+  /** Paths the model may not edit, e.g. the tests when the task says not to change them. */
+  protectedPaths?: RegExp[];
   /**
    * Once per run, when the tests pass, ask the model to check its work against every written
    * requirement (task text and doc comments) before finish is accepted (default false).
    */
   review?: boolean;
 }): Promise<RunResult> {
-  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true, testCommand, review = false } = opts;
+  const { task, llm, tools, ctx, maxSteps = 30, log, onEvent = () => {}, finishGuard = true, readBeforeEdit = true, testCommand, review = false, protectedPaths = [] } = opts;
   let reviewed = false;
   // edit calls that failed, keyed by call + file contents: repeating one cannot succeed.
   const failedEdits = new Map<string, { step: number; error: string }>();
@@ -209,15 +211,37 @@ export async function runAgent(opts: {
         if (before) {
           throw new Error(
             `you already made this exact edit_file call at step ${before.step} on the same file contents, and it failed: ` +
-              `${truncate(before.error, 200)} Repeating it will fail again. Re-read the file and copy old_str exactly, ` +
-              "or use edit_lines with the line numbers shown by read_file.",
+              `${truncate(before.error, 200)} Repeating it will fail again. Re-read the file and copy old_str exactly from it.`,
           );
         }
+        const relPath = typeof args.path === "string" ? path.normalize(args.path) : "";
+        if (EDITS.has(call.name) && protectedPaths.some((re) => re.test(relPath))) {
+          throw new Error(`${call.name} refused: ${args.path} is protected (the task says not to change it). Change the code it tests instead.`);
+        }
+        const target = EDITS.has(call.name) && relPath ? path.resolve(ctx.workspace, relPath) : "";
+        const previous = target && fs.existsSync(target) ? fs.readFileSync(target, "utf8") : undefined;
         try {
           result = await tool.run(args, ctx);
         } catch (err) {
           if (editKey) failedEdits.set(editKey, { step, error: (err as Error).message });
           throw err;
+        }
+        if (target && previous !== undefined && fs.readFileSync(target, "utf8") === previous) {
+          throw new Error(`this ${call.name} changed nothing: ${args.path} already contains exactly this text. Re-read the file before editing again.`);
+        }
+        if (target.endsWith(".py")) {
+          // Reject an edit that turns valid Python into invalid Python (most often indentation),
+          // restoring the file, so the model fixes the edit instead of chasing test errors.
+          const after = await pythonSyntaxError(target, ctx.workspace);
+          const wasValid = previous === undefined || !(await pythonSyntaxError(target, ctx.workspace, previous));
+          if (after && wasValid) {
+            if (previous === undefined) fs.rmSync(target, { force: true });
+            else fs.writeFileSync(target, previous);
+            throw new Error(
+              `${call.name} rejected: it would make ${args.path} invalid Python, so the file was left unchanged.\n${after}\n` +
+                "Check the indentation of your new text against the numbered lines from read_file.",
+            );
+          }
         }
       } catch (err) {
         result = `ERROR: ${(err as Error).message}`;
@@ -260,6 +284,25 @@ export async function runAgent(opts: {
   }
   log?.write("stopped", { reason: "max steps" });
   return { done: false, summary: `Stopped after ${maxSteps} steps without finish.`, steps: maxSteps, changed: [...changed], verified: false };
+}
+
+/** The Python syntax error in a file (or in `source`, checked as that file), or "" if it compiles. */
+async function pythonSyntaxError(file: string, workspace: string, source?: string): Promise<string> {
+  const code = "import sys\nsrc = sys.stdin.read() if len(sys.argv) > 2 else open(sys.argv[1]).read()\ncompile(src, sys.argv[1], 'exec')";
+  const args = ["-c", code, file, ...(source === undefined ? [] : ["-"])];
+  const run = await new Promise<{ code: number | null; output: string }>((resolve) => {
+    const child = spawn("python3", args, { cwd: workspace });
+    let output = "";
+    child.stdout.on("data", (d) => (output += d));
+    child.stderr.on("data", (d) => (output += d));
+    child.on("error", () => resolve({ code: 0, output: "" })); // no python3: skip the check
+    child.on("close", (c) => resolve({ code: c, output }));
+    if (source !== undefined) child.stdin.end(source);
+    else child.stdin.end();
+  });
+  if (run.code === 0) return "";
+  const lines = run.output.trim().split("\n");
+  return lines.slice(-4).join("\n");
 }
 
 /** The one-time "check every requirement" request, with the changed files so the doc comments are in view. */
