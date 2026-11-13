@@ -8,3 +8,4 @@
 | 2026-11-08 | SUITE v2 with 0017 (review on, max-steps 20) | 30 | 8 (27%) | 5 | 17.2 | 177 |
 | 2026-11-09 | SUITE v2 with 0018+0019 (review on, max-steps 20) | 30 | 4 (13%) | 7 | 17.6 | 116 |
 | 2026-11-13 | SUITE v2 Python tasks only (0020) | 15 | 6 (40%) | 2 | 18.1 | 57 |
+| 2026-11-13 | SUITE v2 Python tasks, max-steps 30 (0020) | 15 | 3 (20%) | 3 | 25.5 | 165 |
