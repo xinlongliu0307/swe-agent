@@ -7,3 +7,4 @@
 | 2026-11-08 | qwen2.5-coder:32b, seeded t=0.3, SUITE v2 baseline (0016) | 30 | 9 (30%) | 15 | 11.9 | 130 |
 | 2026-11-08 | SUITE v2 with 0017 (review on, max-steps 20) | 30 | 8 (27%) | 5 | 17.2 | 177 |
 | 2026-11-09 | SUITE v2 with 0018+0019 (review on, max-steps 20) | 30 | 4 (13%) | 7 | 17.6 | 116 |
+| 2026-11-13 | SUITE v2 Python tasks only (0020) | 15 | 6 (40%) | 2 | 18.1 | 57 |
