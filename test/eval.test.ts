@@ -117,8 +117,8 @@ test("trace feature-median: a test that cannot see median is caught by the agent
   assert.equal(r.guardRefusals, 1);
 });
 
-// ---- suites v2 and v3: every task is valid and solvable ----
-for (const [suite, count] of [["v2", 10], ["v3", 8]] as const) {
+// ---- suites v2, v3 and v4: every task is valid and solvable ----
+for (const [suite, count] of [["v2", 10], ["v3", 8], ["v4", 6]] as const) {
   test(`every ${suite} task fails before the agent runs and passes with its reference solution`, async () => {
     const { SUITES } = await import("../evals/run.ts");
     const dir = SUITES[suite]!;
