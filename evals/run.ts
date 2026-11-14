@@ -5,6 +5,7 @@
 //   npm run eval -- --tasks fix-mean,fix-temperature --repeat 3
 //   npm run eval -- --max-steps 15 --keep  (keep work dirs for inspection)
 //   npm run eval -- --suite v2 --repeat 3  (multi-file Python and TypeScript tasks)
+//   npm run eval -- --suite v3 --repeat 3 --max-steps 30  (harder: bug reports, refactor, migration)
 //
 // Sampling is fixed by default so that two versions of the agent face the same
 // randomness: temperature 0.3 and seed = base seed + repeat number. Use
@@ -24,10 +25,15 @@ import type { LLM } from "../src/types.ts";
 
 export const TASKS_DIR = path.join(import.meta.dirname, "tasks");
 
-/** v1: ten small single-file Python tasks. v2: ten multi-file Python and TypeScript tasks. */
+/**
+ * v1: ten small single-file Python tasks. v2: ten multi-file Python and TypeScript tasks.
+ * v3: eight harder multi-file tasks: bug reports whose tests already pass, cross-module features,
+ * a behaviour-preserving refactor and a callback-to-Promise migration.
+ */
 export const SUITES: Record<string, string> = {
   v1: TASKS_DIR,
   v2: path.join(import.meta.dirname, "tasks-v2"),
+  v3: path.join(import.meta.dirname, "tasks-v3"),
 };
 
 /** The visible test suite of every task; a task folder may override it with a test_cmd file. */
