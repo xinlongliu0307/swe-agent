@@ -36,6 +36,24 @@ export function samplingFromEnv(env: NodeJS.ProcessEnv): Sampling {
 const RETRYABLE_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
 
 /**
+ * Some servers (e.g. Ollama) parse the model's tool calls themselves and answer HTTP 500 when
+ * the model wrote a malformed one, for example "XML syntax error on line 3: element <function>
+ * closed by </parameter>". Resending the same request with the same seed gives the same broken
+ * call, so this is reported to the model as an unparsed call instead of being retried.
+ */
+const SERVER_PARSE_ERROR = /(XML|JSON) syntax error|error parsing tool call|failed to parse tool call/i;
+
+/** Prefix of a parse error reported by the model server rather than by our own text parser. */
+export const SERVER_REJECTED = "the model server could not read the tool call";
+
+export class ToolCallParseError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "ToolCallParseError";
+  }
+}
+
+/**
  * POST JSON with a per-attempt timeout and exponential backoff.
  * Retries network failures, timeouts and transient HTTP statuses; fails fast on other errors.
  */
@@ -67,7 +85,19 @@ export async function postJson(
     if (res.ok) return res.json();
     const text = await res.text();
     lastError = `HTTP ${res.status}: ${text.slice(0, 300)}`;
+    if (res.status === 500 && SERVER_PARSE_ERROR.test(text)) throw new ToolCallParseError(serverMessage(text));
     if (!RETRYABLE_STATUS.has(res.status)) break;
   }
   throw new Error(`Model request failed after ${opts.retries + 1} attempt(s): ${lastError}`);
+}
+
+/** The error message inside an OpenAI-style error body, or the body itself. */
+function serverMessage(text: string): string {
+  try {
+    const m = JSON.parse(text)?.error?.message;
+    if (typeof m === "string") return m.slice(0, 300);
+  } catch {
+    // not JSON
+  }
+  return text.slice(0, 300);
 }

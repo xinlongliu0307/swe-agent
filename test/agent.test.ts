@@ -308,6 +308,7 @@ test("review: the first passing finish is turned into a requirements check, the 
   const res = await runAgent({ task: "Fix double", llm, tools: defaultTools, ctx: ctxFor(ws), testCommand: "python3 -m unittest -q", review: true, onEvent: (k) => events.push(k) });
   assert.equal(events.filter((k) => k === "review").length, 1);
   assert.match(reviewText, /List every requirement/);
+  assert.match(reviewText, /Assert, do not just print/);
   assert.match(reviewText, /Task: Fix double/);
   assert.match(reviewText, /--- calc.py ---\n {3}1 {2}def double\(x\):/);
   assert.equal(res.done, true);

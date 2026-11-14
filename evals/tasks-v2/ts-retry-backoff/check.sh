@@ -3,6 +3,7 @@
 set -e
 git diff --quiet HEAD -- tests test || { echo "tests were edited"; exit 1; }
 node --disable-warning=ExperimentalWarning --test test/*.test.ts >/dev/null 2>&1 || { echo "visible tests fail"; exit 1; }
+trap 'rm -f .hidden_check.mjs' EXIT
 cat > .hidden_check.mjs <<'EOF'
 import assert from "node:assert/strict";
 import { retry } from "./src/retry.ts";

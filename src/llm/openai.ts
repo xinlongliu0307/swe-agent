@@ -1,6 +1,6 @@
 import type { AssistantMessage, LLM, Message, Tool, ToolCall } from "../types.ts";
 import { parseTextToolCalls } from "./textToolCalls.ts";
-import { postJson, type RetryOptions, type Sampling } from "./http.ts";
+import { postJson, SERVER_REJECTED, ToolCallParseError, type RetryOptions, type Sampling } from "./http.ts";
 
 /** Client for any OpenAI-compatible /chat/completions endpoint (Ollama, vLLM, hosted APIs). */
 export class OpenAICompatible implements LLM {
@@ -31,12 +31,18 @@ export class OpenAICompatible implements LLM {
       ...(this.sampling.seed !== undefined ? { seed: this.sampling.seed } : {}),
       ...(this.sampling.maxTokens !== undefined ? { max_tokens: this.sampling.maxTokens } : {}),
     };
-    const data = await postJson(
-      `${this.baseUrl}/chat/completions`,
-      this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
-      body,
-      this.retry,
-    );
+    let data;
+    try {
+      data = await postJson(
+        `${this.baseUrl}/chat/completions`,
+        this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+        body,
+        this.retry,
+      );
+    } catch (err) {
+      if (!(err instanceof ToolCallParseError)) throw err;
+      return { role: "assistant", content: "", toolCalls: [], parseErrors: [`${SERVER_REJECTED}: ${err.message}`] };
+    }
     const msg = data.choices?.[0]?.message ?? {};
     const cutOff = data.choices?.[0]?.finish_reason === "length";
     let parseErrors: string[] = [];

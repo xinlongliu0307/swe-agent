@@ -143,3 +143,18 @@ test("tests are protected only when the task says not to edit them", async () =>
   assert.equal(p.some((re) => re.test("shop/cart.py")), false);
   assert.deepEqual(testPathsIfProtected("Add median and a unit test for it to test_stats.py."), []);
 });
+
+test("the agent never sees files left by the pre-run check (e.g. .hidden_check.mjs)", async () => {
+  const { SUITES } = await import("../evals/run.ts");
+  const os = await import("node:os");
+  const logDir = await fs.mkdtemp(path.join(os.tmpdir(), "swe-evallog-"));
+  const r = await runTask(path.join(SUITES.v3!, "ts-csv-export"), scripted([call("list_dir", {}), call("finish", { summary: "looked" })]), { logDir });
+  assert.equal(r.solved, false);
+  const [runDir] = await fs.readdir(logDir);
+  const [file] = await fs.readdir(path.join(logDir, runDir!));
+  const log = await fs.readFile(path.join(logDir, runDir!, file!), "utf8");
+  const listing = log.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.event === "tool" && e.data.name === "list_dir");
+  assert.ok(listing, "list_dir ran");
+  assert.doesNotMatch(listing.data.result, /hidden_check/);
+  await fs.rm(logDir, { recursive: true, force: true });
+});

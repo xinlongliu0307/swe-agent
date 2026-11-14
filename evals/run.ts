@@ -85,6 +85,15 @@ export async function prepareWorkdir(taskDir: string): Promise<string> {
   return work;
 }
 
+/**
+ * Put the work dir back exactly as committed. The pre-run check may leave files behind
+ * (a TypeScript check writes .hidden_check.mjs), and the agent must never see them.
+ */
+export async function resetWorkdir(work: string): Promise<void> {
+  await git(work, "checkout", "-q", "--", ".");
+  await git(work, "clean", "-fdxq");
+}
+
 export async function runCheck(taskDir: string, work: string): Promise<{ ok: boolean; output: string }> {
   const { code, output } = await runCommand("bash", [path.join(taskDir, "check.sh")], work, 120_000);
   return { ok: code === 0, output: output.trim().split("\n").slice(-3).join(" | ") };
@@ -102,6 +111,7 @@ export async function runTask(
   try {
     const before = await runCheck(taskDir, work);
     if (before.ok) return { ...base, solved: false, checkOutput: "", invalid: "check.sh passes before the agent runs" };
+    await resetWorkdir(work);
 
     const instruction = (await fsp.readFile(path.join(taskDir, "task.md"), "utf8")).trim();
     const log = opts.logDir ? new SessionLog(path.join(opts.logDir, `${task}-${rep}`), work) : undefined;

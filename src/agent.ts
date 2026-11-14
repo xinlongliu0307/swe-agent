@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { LLM, Message, Tool, ToolContext } from "./types.ts";
+import { SERVER_REJECTED } from "./llm/http.ts";
 import { truncate } from "./workspace.ts";
 import { runCommand } from "./tools/index.ts";
 import type { SessionLog } from "./log.ts";
@@ -312,8 +313,8 @@ export function reviewMessage(task: string, files: string[], workspace: string, 
     ? `node --input-type=module -e 'import { f } from "./src/file.ts"; console.log(f(1, 2))'`
     : `python3 -c "from package.module import f; print(f(1, 2))"`;
   const tool = ts
-    ? `run_check with language "node" and code such as: import { f } from "./src/file.ts"; console.log(f(1, 2));`
-    : `run_check with language "python" and code such as: from package.module import f; print(f(1, 2))`;
+    ? `run_check with language "node" and code such as: import assert from "node:assert/strict"; import { f } from "./src/file.ts"; assert.equal(f(1, 2), "1,2\\r\\n");`
+    : `run_check with language "python" and code such as: from package.module import f; assert f(1, 2) == "1,2\\r\\n", repr(f(1, 2))`;
   let budget = maxChars;
   const shown: string[] = [];
   for (const f of files) {
@@ -334,7 +335,8 @@ export function reviewMessage(task: string, files: string[], workspace: string, 
     "The tests pass, but tests often check only part of what was asked. Before finishing:",
     "1. Re-read the task and the doc comments or docstrings in the files you changed (shown below).",
     "2. List every requirement they state, one per line, including edge cases (empty input, errors to raise, rounding, formatting, every caller that must change).",
-    `3. For each requirement the tests do not check, try it out with ${tool} (no shell quoting needed; ${example} also works in run_shell).`,
+    `3. For each requirement the tests do not check, write a check that asserts the exact expected value, with ${tool} (no shell quoting needed; ${example} also works in run_shell).`,
+    "   Assert, do not just print: a missing trailing newline, a CR or a space is easy to miss when you read printed output.",
     "Fix anything that fails, run the tests again, then call finish.",
     "",
     `Task: ${task}`,
@@ -344,6 +346,13 @@ export function reviewMessage(task: string, files: string[], workspace: string, 
 }
 
 export function unparsedCallMessage(detail: string): string {
+  if (detail.startsWith(SERVER_REJECTED)) {
+    return [
+      `Your last tool call was NOT executed: ${detail}. No file was changed.`,
+      "Send it again as one complete tool call, with every parameter written out and closed.",
+      "If it carried a lot of text, make a smaller change instead (edit_file with a short old_str/new_str).",
+    ].join("\n");
+  }
   return [
     `Your last tool call was NOT executed: it is not valid JSON (${detail}). No file was changed.`,
     'Send the call again as one JSON object: {"name": "<tool>", "arguments": {...}}.',

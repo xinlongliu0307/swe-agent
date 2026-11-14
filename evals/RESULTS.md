@@ -12,3 +12,4 @@
 | 2026-11-14 | qwen3.6:27b (Ollama 0.40.16), SUITE v2 Python tasks (0020) | 15 | 13 (87%) | 2 | 12.6 | 1 |
 | 2026-11-14 | qwen3.6:27b, SUITE v2 all tasks (0020) | 30 | 29 (97%) | 1 | 13.9 | 13 |
 | 2026-11-14 | qwen3.6:27b, SUITE v1 (0020) | 50 | 50 (100%) | 0 | 8.4 | 7 |
+| 2026-11-14 | qwen3.6:27b, SUITE v3 (0021, max-steps 30; 1 model error; hidden check visible to agent) | 24 | 22 (92%) | 2 | 14.9 | 7 |
