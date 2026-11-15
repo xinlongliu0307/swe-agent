@@ -309,6 +309,7 @@ test("review: the first passing finish is turned into a requirements check, the 
   assert.equal(events.filter((k) => k === "review").length, 1);
   assert.match(reviewText, /List every requirement/);
   assert.match(reviewText, /Assert, do not just print/);
+  assert.match(reviewText, /the doc comment is the specification/);
   assert.match(reviewText, /Task: Fix double/);
   assert.match(reviewText, /--- calc.py ---\n {3}1 {2}def double\(x\):/);
   assert.equal(res.done, true);

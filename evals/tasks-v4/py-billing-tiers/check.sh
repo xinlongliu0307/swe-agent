@@ -5,7 +5,7 @@ git diff --quiet HEAD -- tests || { echo "existing tests were edited"; exit 1; }
 [ -f tests/test_tiers.py ] || { echo "tests/test_tiers.py is missing"; exit 1; }
 python3 -m unittest discover -s tests -t . -q >/dev/null 2>&1 || { echo "visible tests fail"; exit 1; }
 python3 - <<'PYEOF'
-import os, random, shutil, subprocess, sys, tempfile
+import json, os, random, shutil, subprocess, sys, tempfile
 
 REFERENCE = '''
 def tiered_price(qty, tiers):
@@ -63,7 +63,24 @@ for qty, tiers in cases:
 inv = build_invoice("acme", "team", 1500)
 assert (inv["net"], inv["tax"], inv["total"]) == (42000, 4200, 46200), inv
 
-def run_tests_with(source):
+# Runs every test in tests/test_tiers.py on its own and prints {test id: passed}.
+RUNNER = """
+import json, unittest
+def flat(suite):
+    for t in suite:
+        if isinstance(t, unittest.TestSuite):
+            yield from flat(t)
+        else:
+            yield t
+result = {}
+for t in flat(unittest.defaultTestLoader.loadTestsFromName("tests.test_tiers")):
+    r = unittest.TestResult()
+    t.run(r)
+    result[t.id()] = r.wasSuccessful()
+print(json.dumps(result))
+"""
+
+def results_with(source):
     work = tempfile.mkdtemp()
     try:
         for name in ("billing", "tests"):
@@ -71,15 +88,21 @@ def run_tests_with(source):
         with open(os.path.join(work, "billing", "tiers.py"), "w") as f:
             f.write(source)
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-        p = subprocess.run([sys.executable, "-m", "unittest", "-q", "tests.test_tiers"], cwd=work, env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
-        return p.returncode, p.stdout
+        p = subprocess.run([sys.executable, "-c", RUNNER], cwd=work, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+        assert p.returncode == 0, "could not run tests/test_tiers.py: " + p.stderr[-400:]
+        return json.loads(p.stdout.strip().splitlines()[-1])
     finally:
         shutil.rmtree(work)
 
-code, out = run_tests_with(REFERENCE)
-assert code == 0, "tests/test_tiers.py fails with a correct implementation:\n" + out[-800:]
-assert "Ran 0 tests" not in out, "tests/test_tiers.py contains no tests"
-missed = [name for name, src in MUTANTS.items() if run_tests_with(src)[0] == 0]
+# Tests that fail with a correct implementation assert something the docstring does not specify
+# (e.g. a choice for empty tiers). They are not held against the agent, but they cannot count
+# towards catching wrong implementations either.
+reference = results_with(REFERENCE)
+in_spec = sorted(t for t, ok in reference.items() if ok)
+if len(in_spec) < len(reference):
+    print("ignored, fail with a correct implementation: " + ", ".join(sorted(set(reference) - set(in_spec))))
+assert in_spec, "no test in tests/test_tiers.py passes with a correct implementation"
+missed = [name for name, src in MUTANTS.items() if all(results_with(src).get(t, False) for t in in_spec)]
 assert not missed, "tests/test_tiers.py does not catch these wrong implementations: " + "; ".join(missed)
 PYEOF
