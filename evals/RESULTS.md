@@ -14,3 +14,4 @@
 | 2026-11-14 | qwen3.6:27b, SUITE v1 (0020) | 50 | 50 (100%) | 0 | 8.4 | 7 |
 | 2026-11-14 | qwen3.6:27b, SUITE v3 (0021, max-steps 30; 1 model error; hidden check visible to agent) | 24 | 22 (92%) | 2 | 14.9 | 7 |
 | 2026-11-14 | qwen3.6:27b, SUITE v3 (0022, max-steps 30) | 24 | 24 (100%) | 0 | 16.1 | 10 |
+| 2026-11-15 | qwen3.6:27b, SUITE v4 (0023, max-steps 40) | 18 | 15 (83%) | 3 | 20.8 | 13 |
