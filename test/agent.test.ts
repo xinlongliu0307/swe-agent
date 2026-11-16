@@ -455,3 +455,64 @@ test("edit_lines is not offered by default any more", () => {
   assert.equal(defaultTools.some((t) => t.name === "edit_lines"), false);
   assert.equal(defaultTools.some((t) => t.name === "run_check"), true);
 });
+
+// ---- 0026: old_str re-indented differently on different lines (trace ts-orders-stale-total-1) ----
+const PRICING = [
+  "const memo = new Map<string, number>();",
+  "",
+  "/** Memoised. */",
+  "export function priceOrder(order: { id: string }): number {",
+  "  const hit = memo.get(order.id);",
+  "  if (hit) return hit;",
+  "  return 0;",
+  "}",
+  "",
+].join("\n");
+
+test("edit_file maps an old_str indented 4/2 onto a file indented 2/0, re-indenting new_str the same way", async () => {
+  const ws = await tmp();
+  await fs.writeFile(path.join(ws, "pricing.ts"), PRICING);
+  const res = await editFile.run(
+    {
+      path: "pricing.ts",
+      old_str: "export function priceOrder(order: { id: string }): number {\n    const hit = memo.get(order.id);\n    if (hit) return hit;\n    return 0;\n  }",
+      new_str: "export function priceOrder(order: { id: string }): number {\n    const key = order.id;\n    if (memo.has(key)) {\n      return memo.get(key)!;\n    }\n    return 0;\n  }",
+    },
+    ctxFor(ws),
+  );
+  assert.match(res, /after mapping its indentation onto the file's/);
+  assert.equal(
+    await fs.readFile(path.join(ws, "pricing.ts"), "utf8"),
+    PRICING.replace(
+      "  const hit = memo.get(order.id);\n  if (hit) return hit;\n  return 0;\n}",
+      "  const key = order.id;\n  if (memo.has(key)) {\n    return memo.get(key)!;\n  }\n  return 0;\n}",
+    ),
+  );
+});
+
+test("indentation mapping is refused when it is inconsistent, ambiguous, or would merge Python blocks", async () => {
+  const { findIndentMapped } = await import("../src/tools/index.ts");
+  // inconsistent: the same 4-space indentation would stand for both 2 and 4 spaces in the file
+  assert.equal(findIndentMapped("a {\n  b;\n    c;\n}\n", "a {\n    b;\n    c;\n}", false), null);
+  // ambiguous: the same lines occur twice
+  assert.equal(findIndentMapped("if x:\n  y\nif x:\n  y\n", "if x:\n    y", false), null);
+  // Python: two different indentations in old_str may not become the same one in the file
+  const py = "def f():\n    if a:\n        b()\n    c()\n";
+  assert.equal(findIndentMapped(py, "    if a:\n  b()\n  c()", true), null);
+  // ...but a consistent re-indentation of a Python block is fine
+  const ok = findIndentMapped(py, "  if a:\n    b()\n  c()", true);
+  assert.ok(ok);
+  assert.equal(ok.reindent("  if a:\n    b()\n    d()\n  c()"), "    if a:\n        b()\n        d()\n    c()");
+});
+
+test("eval summary reports minutes and runs that hit the step limit", async () => {
+  const { summarise } = await import("../evals/run.ts");
+  const base = { toolErrors: 0, guardRefusals: 0, verified: false, modelError: false, changed: [], checkOutput: "", summary: "", falseClaim: false, solved: true };
+  const s = summarise([
+    { ...base, task: "a", rep: 1, steps: 40, finished: false, seconds: 600 },
+    { ...base, task: "a", rep: 2, steps: 10, finished: true, seconds: 120 },
+  ]);
+  assert.equal(s.rows[0]?.stepLimit, 1);
+  assert.equal(s.rows[0]?.meanMinutes, 6);
+  assert.equal(s.minutes, 12);
+});

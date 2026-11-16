@@ -145,6 +145,67 @@ function shiftIndent(newStr: string, add: string, remove: string): string {
     .join("\n");
 }
 
+/**
+ * old_str matches the file line for line except for indentation, and the model's indentation maps
+ * consistently onto the file's: each indentation used in old_str always stands for the same
+ * indentation in the file, and deeper stays deeper or equal. Models often re-indent copied code,
+ * e.g. a 2-space function body sent with 4 spaces and its closing brace with 2. Returns the
+ * matched file text and a function that re-indents new_str the same way, or null when the match is
+ * missing, ambiguous or inconsistent. strict (for Python) also requires that different
+ * indentations stay different, so the block structure cannot change.
+ */
+export function findIndentMapped(
+  text: string,
+  oldStr: string,
+  strict: boolean,
+): { found: string; reindent: (newStr: string) => string | null } | null {
+  const fileLines = text.split("\n");
+  const oldLines = oldStr.replace(/\n+$/, "").split("\n");
+  if (!oldLines.some((l) => l.trim() !== "")) return null;
+  const lead = (l: string) => /^[ \t]*/.exec(l)![0];
+  const matches: Array<{ start: number; map: Map<string, string> }> = [];
+  for (let s = 0; s + oldLines.length <= fileLines.length; s++) {
+    const map = new Map<string, string>();
+    let ok = true;
+    for (let j = 0; j < oldLines.length && ok; j++) {
+      const f = fileLines[s + j]!;
+      const o = oldLines[j]!;
+      if (f.trim() !== o.trim()) ok = false;
+      else if (o.trim() !== "") {
+        const prev = map.get(lead(o));
+        if (prev === undefined) map.set(lead(o), lead(f));
+        else if (prev !== lead(f)) ok = false;
+      }
+    }
+    if (!ok) continue;
+    const levels = [...map].sort((a, b) => a[0].length - b[0].length);
+    for (let i = 1; i < levels.length && ok; i++) {
+      const [lo, hi] = [levels[i - 1]![1].length, levels[i]![1].length];
+      if (hi < lo || (strict && hi === lo)) ok = false;
+    }
+    if (ok) matches.push({ start: s, map });
+  }
+  if (matches.length !== 1) return null;
+  const { start, map } = matches[0]!;
+  const keys = [...map.keys()].sort((a, b) => b.length - a.length);
+  const reindent = (newStr: string): string | null => {
+    const out: string[] = [];
+    for (const line of newStr.split("\n")) {
+      if (line.trim() === "") {
+        out.push(line);
+        continue;
+      }
+      const l = lead(line);
+      // the deepest known indentation that this line's indentation starts with, plus the rest
+      const key = keys.find((k) => l.startsWith(k));
+      if (key === undefined) return null;
+      out.push(map.get(key)! + l.slice(key.length) + line.slice(l.length));
+    }
+    return out.join("\n");
+  };
+  return { found: fileLines.slice(start, start + oldLines.length).join("\n"), reindent };
+}
+
 /** The file lines most like old_str's first line, to show when nothing matched. */
 function closestLines(text: string, oldStr: string): string {
   const first = oldStr.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
@@ -211,6 +272,15 @@ export const editFile: Tool = {
         const startLine = text.slice(0, text.indexOf(shifted.found)).split("\n").length;
         const endLine = startLine + fixedNew.split("\n").length - 1;
         return `Edited ${args.path} (old_str matched after adjusting its indentation to the file's). Around the change it now reads:\n${snippet(updated, startLine, endLine)}`;
+      }
+      const mapped = findIndentMapped(text, oldStr, /\.py$/.test(String(args.path)));
+      const remapped = mapped?.reindent(newStr.replace(/\n+$/, ""));
+      if (mapped && remapped != null) {
+        const updated = text.replace(mapped.found, () => remapped);
+        await fs.writeFile(full, updated);
+        const startLine = text.slice(0, text.indexOf(mapped.found)).split("\n").length;
+        const endLine = startLine + remapped.split("\n").length - 1;
+        return `Edited ${args.path} (old_str matched line for line after mapping its indentation onto the file's; new_str was re-indented the same way, check it below). Around the change it now reads:\n${snippet(updated, startLine, endLine)}`;
       }
       throw new Error(
         `old_str found 0 times in ${args.path}; it must match the file exactly.${closestLines(text, oldStr)}\n` +

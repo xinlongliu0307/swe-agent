@@ -203,6 +203,8 @@ export function summarise(records: EvalRecord[]) {
     task,
     solved: `${rs.filter((r) => r.solved).length}/${rs.length}`,
     meanSteps: +(rs.reduce((s, r) => s + r.steps, 0) / rs.length).toFixed(1),
+    meanMinutes: +(rs.reduce((s, r) => s + r.seconds, 0) / rs.length / 60).toFixed(1),
+    stepLimit: rs.filter((r) => !r.finished && !r.modelError).length,
     toolErrors: rs.reduce((s, r) => s + r.toolErrors, 0),
     refusals: rs.reduce((s, r) => s + r.guardRefusals, 0),
     falseClaims: rs.filter((r) => r.falseClaim).length,
@@ -213,6 +215,7 @@ export function summarise(records: EvalRecord[]) {
     passRate: valid.length ? +(solved / valid.length).toFixed(3) : 0,
     falseClaims: valid.filter((r) => r.falseClaim).length,
     modelErrors: valid.filter((r) => r.modelError).length,
+    minutes: +(valid.reduce((s, r) => s + r.seconds, 0) / 60).toFixed(1),
     invalidTasks: [...new Set(records.filter((r) => r.invalid).map((r) => r.task))],
     rows,
   };
@@ -312,7 +315,7 @@ async function main() {
       console.log(
         r.invalid
           ? `INVALID (${r.invalid})`
-          : `${r.solved ? "PASS" : "FAIL"}${r.modelError ? " (MODEL ERROR)" : ""}  steps=${r.steps} errors=${r.toolErrors} refused=${r.guardRefusals} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}`,
+          : `${r.solved ? "PASS" : "FAIL"}${r.modelError ? " (MODEL ERROR)" : ""}  steps=${r.steps} errors=${r.toolErrors} refused=${r.guardRefusals} ${r.seconds}s${r.falseClaim ? "  FALSE CLAIM" : ""}${!r.finished && !r.modelError ? "  STEP LIMIT" : ""}`,
       );
       if (consecutiveModelErrors(records) >= MAX_CONSECUTIVE_MODEL_ERRORS) {
         console.error(`\nStopping: ${MAX_CONSECUTIVE_MODEL_ERRORS} model errors in a row. The endpoint went away; results so far are saved but are not a fair measurement.`);
@@ -326,7 +329,7 @@ async function main() {
   console.log("");
   console.table(summary.rows);
   console.log(
-    `Solved ${summary.solved}/${summary.runs} (${(summary.passRate * 100).toFixed(0)}%), false claims: ${summary.falseClaims}, model errors: ${summary.modelErrors}` +
+    `Solved ${summary.solved}/${summary.runs} (${(summary.passRate * 100).toFixed(0)}%), false claims: ${summary.falseClaims}, model errors: ${summary.modelErrors}, total ${summary.minutes} min` +
       (summary.invalidTasks.length ? `, invalid tasks: ${summary.invalidTasks.join(", ")}` : ""),
   );
   writeReport(!aborted);
