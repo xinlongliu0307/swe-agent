@@ -7,6 +7,7 @@
 //   npm run eval -- --suite v2 --repeat 3  (multi-file Python and TypeScript tasks)
 //   npm run eval -- --suite v3 --repeat 3 --max-steps 30  (harder: bug reports, refactor, migration)
 //   npm run eval -- --suite v4 --repeat 3 --max-steps 40  (repo-scale: 15-23 files per task)
+//   npm run eval -- <same options> --resume runs/eval-<stamp>.json  (finish an interrupted eval)
 //
 // Sampling is fixed by default so that two versions of the agent face the same
 // randomness: temperature 0.3 and seed = base seed + repeat number. Use
@@ -185,6 +186,14 @@ export async function preflight(llm: LLM): Promise<string | null> {
   }
 }
 
+/** A saved report to resume: its finished runs (model errors are run again) and its timestamp. */
+export async function loadReport(file: string): Promise<{ stamp: string; records: EvalRecord[] }> {
+  const m = /eval-(.+)\.json$/.exec(path.basename(file));
+  if (!m) throw new Error(`--resume expects a runs/eval-<stamp>.json report, got ${file}`);
+  const data = JSON.parse(await fsp.readFile(file, "utf8")) as { records: EvalRecord[] };
+  return { stamp: m[1]!, records: data.records.filter((r) => !r.modelError) };
+}
+
 export function summarise(records: EvalRecord[]) {
   const valid = records.filter((r) => !r.invalid);
   const solved = valid.filter((r) => r.solved).length;
@@ -228,6 +237,7 @@ async function main() {
       "no-agent-tests": { type: "boolean", default: false },
       suite: { type: "string", default: "v1" },
       "no-review": { type: "boolean", default: false },
+      resume: { type: "string" },
     },
   });
   const suiteDir = SUITES[values.suite!];
@@ -237,7 +247,9 @@ async function main() {
   const unknown = names.filter((n) => !all.includes(n));
   if (unknown.length) throw new Error(`Unknown task(s): ${unknown.join(", ")}`);
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  // --resume runs/eval-<stamp>.json: keep that report's finished runs and do only the missing ones.
+  const previous = values.resume ? await loadReport(values.resume) : null;
+  const stamp = previous?.stamp ?? new Date().toISOString().replace(/[:.]/g, "-");
   const logDir = path.join(repoRoot, "runs", `eval-${stamp}`);
   const onRetry = (attempt: number, reason: string) => process.stdout.write(`[retry ${attempt}: ${reason}] `);
   const fixed = values.temperature !== "default";
@@ -252,7 +264,26 @@ async function main() {
   const repeat = Number(values.repeat);
   console.log(`Suite: ${values.suite} (${names.length} tasks), requirements review: ${values["no-review"] ? "off" : "on"}`);
   console.log(fixed ? `Sampling: temperature ${sampling!.temperature}, seeds ${sampling!.baseSeed + 1}..${sampling!.baseSeed + repeat}` : "Sampling: provider defaults (not reproducible)");
-  const records: EvalRecord[] = [];
+  const records: EvalRecord[] = previous ? previous.records : [];
+  const done = new Set(records.map((r) => `${r.task}#${r.rep}`));
+  if (previous) console.log(`Resuming ${values.resume}: ${records.length} run(s) already done, kept.`);
+  const report = path.join(repoRoot, "runs", `eval-${stamp}.json`);
+  let aborted = false;
+  // Written after every run, so an interrupted eval keeps its results and can be resumed.
+  const writeReport = (complete: boolean) => {
+    fs.mkdirSync(path.dirname(report), { recursive: true });
+    fs.writeFileSync(
+      report,
+      JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, suite: values.suite, review: !values["no-review"], repeat, sampling, agentTests: !values["no-agent-tests"], aborted, complete, summary: summarise(records), records }, null, 2),
+    );
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      writeReport(false);
+      console.error(`\nInterrupted (${signal}) after ${records.length} run(s). Continue with: npm run eval -- <same options> --resume ${path.relative(process.cwd(), report)}`);
+      process.exit(130);
+    });
+  }
 
   process.stdout.write("Checking the model endpoint ... ");
   const down = await preflight(llm);
@@ -263,9 +294,9 @@ async function main() {
   }
   console.log("ok\n");
 
-  let aborted = false;
   outer: for (const name of names) {
     for (let rep = 1; rep <= repeat; rep++) {
+      if (done.has(`${name}#${rep}`)) continue;
       process.stdout.write(`${name} #${rep} ... `);
       const taskDir = path.join(suiteDir, name);
       const r = await runTask(taskDir, llmFor(rep), {
@@ -277,6 +308,7 @@ async function main() {
         keep: values.keep,
       });
       records.push(r);
+      writeReport(false);
       console.log(
         r.invalid
           ? `INVALID (${r.invalid})`
@@ -297,12 +329,7 @@ async function main() {
     `Solved ${summary.solved}/${summary.runs} (${(summary.passRate * 100).toFixed(0)}%), false claims: ${summary.falseClaims}, model errors: ${summary.modelErrors}` +
       (summary.invalidTasks.length ? `, invalid tasks: ${summary.invalidTasks.join(", ")}` : ""),
   );
-  const report = path.join(repoRoot, "runs", `eval-${stamp}.json`);
-  await fsp.mkdir(path.dirname(report), { recursive: true });
-  await fsp.writeFile(
-    report,
-    JSON.stringify({ model: process.env.SWE_MODEL, provider: process.env.SWE_PROVIDER, suite: values.suite, review: !values["no-review"], repeat, sampling, agentTests: !values["no-agent-tests"], aborted, summary, records }, null, 2),
-  );
+  writeReport(!aborted);
   console.log(`report: ${path.relative(process.cwd(), report)}`);
 }
 

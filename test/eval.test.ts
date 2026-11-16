@@ -158,3 +158,17 @@ test("the agent never sees files left by the pre-run check (e.g. .hidden_check.m
   assert.doesNotMatch(listing.data.result, /hidden_check/);
   await fs.rm(logDir, { recursive: true, force: true });
 });
+
+test("--resume keeps a saved report's finished runs, except model errors", async () => {
+  const { loadReport } = await import("../evals/run.ts");
+  const os = await import("node:os");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "swe-report-"));
+  const file = path.join(dir, "eval-2026-11-15T02-00-00-000Z.json");
+  const rec = (task: string, rep: number, modelError: boolean) => ({ task, rep, modelError, solved: !modelError });
+  await fs.writeFile(file, JSON.stringify({ records: [rec("a", 1, false), rec("a", 2, true), rec("b", 1, false)] }));
+  const r = await loadReport(file);
+  assert.equal(r.stamp, "2026-11-15T02-00-00-000Z");
+  assert.deepEqual(r.records.map((x) => `${x.task}#${x.rep}`), ["a#1", "b#1"]);
+  await assert.rejects(loadReport(path.join(dir, "notes.json")), /expects a runs\/eval-<stamp>\.json/);
+  await fs.rm(dir, { recursive: true, force: true });
+});
