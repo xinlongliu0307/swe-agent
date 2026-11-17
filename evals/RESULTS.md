@@ -16,3 +16,5 @@
 | 2026-11-14 | qwen3.6:27b, SUITE v3 (0022, max-steps 30) | 24 | 24 (100%) | 0 | 16.1 | 10 |
 | 2026-11-15 | qwen3.6:27b, SUITE v4 (0023, max-steps 40) | 18 | 15 (83%) | 3 | 20.8 | 13 |
 | 2026-11-16 | qwen3.6:27b, SUITE v4 (0024, max-steps 40; 12 runs before an interruption + 6 rerun) | 18 | 18 (100%) | 0 | 22.3 | 14 |
+| 2026-11-17 | qwen3.6:27b, SUITE v4 ts-orders-stale-total only (0026) | 3 | 3 (100%) | 0 | 22.0 | 3 |
+| 2026-11-17 | qwen3.6:27b, SUITE v4 (0026, max-steps 40; 105 min) | 18 | 18 (100%) | 0 | 21.0 | 2 |
